@@ -3,17 +3,11 @@
 #include <DallasTemperature.h>
 
 #include <WiFi.h>
-#include <NTPClient.h>
 #include <WiFiUdp.h>
+#include <NTPClient.h>
 #include <AsyncMqttClient.h>
 
 #define ever (;;)
-
-/*
- * MESSAGES:
- * 2 left flashing: connecting to WiFi
- * all constant: trying to read time from the internet
- */
 
 const char* HOME_SSID     = "CHANGE_ME_WIFI_SSID";
 const char* HOME_PASSWORD = "CHANGE_ME_WIFI_PASSWORD";
@@ -22,7 +16,7 @@ const auto MQTT_HOST = IPAddress(0, 0, 0, 0);
 const int MQTT_PORT = 1883;
 const char* MQTT_USER     = "CHANGE_ME_MQTT_USER";
 const char* MQTT_PASSWORD = "CHANGE_ME_MQTT_PASSWORD";
-const char* MQTT_TOPIC = "zegarekBinarny/temperature";
+const char* MQTT_TOPIC    = "bcdClock/temp";
 AsyncMqttClient mqttClient;
 
 const int GMT = +1; // Polska
@@ -70,6 +64,26 @@ void changeBrightness() {
   }
 }
 
+typedef enum Modes {
+  CLOCK,
+  THERMOMETER,
+  BLANK,
+  ERR,
+} Modes;
+Modes mode = ERR;
+Modes lastMode = CLOCK;
+void changeMode() {
+    switch(mode) {
+      case CLOCK:        mode = THERMOMETER;   break;
+      case THERMOMETER:  mode = BLANK;         break;
+      case BLANK:        mode = CLOCK;         break;
+      case ERR:          break;
+    }
+    createMainThread();
+}
+
+int err = 0; // 0 - WiFi, 1 - network
+
 const int GPIO_THERMOMETER = 32;
 OneWire oneWireThermometer(GPIO_THERMOMETER);
 DallasTemperature thermometer(&oneWireThermometer);
@@ -77,27 +91,13 @@ DallasTemperature thermometer(&oneWireThermometer);
 const int GPIO_BUTTON = 35;
 ezButton button(GPIO_BUTTON);
 const int DEBOUNCE_TIME = 50; // [ms]
-int pressedTs = 0; // -1: brightness was changed, 0: button is not pressed, >0: button is pressed for x amount of time
-
-typedef enum Modes {
-  CLOCK,
-  THERMOMETER,
-  BLANK,
-} Modes;
-Modes mode = CLOCK;
-void changeMode() {
-    switch(mode) {
-      case CLOCK:        mode = THERMOMETER;   break;
-      case THERMOMETER:  mode = BLANK;         break;
-      case BLANK:        mode = CLOCK;         break;
-    }
-}
+int pressedTs = 0; // 0: button is not pressed, >0: button is pressed for x amount of time
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
 
-TaskHandle_t mainThreadHandle;
-TaskHandle_t mqttThreadHandle;
+TaskHandle_t mainThreadHandle = NULL;
+TaskHandle_t mqttThreadHandle = NULL;
 
 float temperature = 0;
 int temperatureTs = 0; // timestamp of last temperature reading
@@ -130,27 +130,34 @@ void updateTemperature() {
 
 //// MODES
 
-void modeClock() {
-  timeClient.update();
-  setNumber(0, timeClient.getHours());
-  setNumber(1, timeClient.getMinutes());
-  setNumber(2, timeClient.getSeconds());
+void modeClock(void* pvParameters) {
+  for ever {
+    timeClient.update();
+    setNumber(0, timeClient.getHours());
+    setNumber(1, timeClient.getMinutes());
+    setNumber(2, timeClient.getSeconds());
+    delay(100);
+  }
 }
 
-void modeThermometer() {
-  updateTemperature();
-  bool isNegative = temperature < 0;
-  LEDS[0][1] = LEDS[1][1] = isNegative ? HIGH : LOW;
-  setNumber(1, abs(temperature));
+void modeThermometer(void* pvParameters) {
+  for ever {
+    updateTemperature();
+    bool isNegative = temperature < 0;
+    LEDS[0][1] = LEDS[1][1] = isNegative ? HIGH : LOW;
+    setNumber(1, abs(temperature));
+    delay(2000);
+  }
 }
 
-
-void modeDisabled() {
-  setAll(LOW);
-  delay(1000 * 60);
+void modeErr(void* pvParameters) {
+  for ever {
+    LEDS[err][0] = !LEDS[err][0];
+    LEDS[err][1] = !LEDS[err][0];
+    setLeds();
+    delay(250);
+  }
 }
-
-//// REAL TIME THREAD
 
 void setLeds() {
   for(int col = 0; col < LEDS_COLS; col++){
@@ -170,40 +177,82 @@ void disableLeds() {
   }
 }
 
-void mainThread(void* pvParameters) {
-  for ever {
-    switch(mode) {
-      case CLOCK:
-        modeClock();
-        delay(1000);
-        break;
-      case THERMOMETER:
-        modeThermometer();
-        delay(2000);
-        break;
-      case BLANK:
-        modeDisabled();
-        break;
-    }
-    delay(1);
+void (*getModePtr(void))(void* pvParameters) {
+  switch(mode) {
+    case THERMOMETER:
+      return &modeThermometer;
+    case ERR:
+      return &modeErr;
+    case CLOCK:
+    default: 
+      return &modeClock;
   }
 }
+
 void createMainThread() {
-  xTaskCreatePinnedToCore(mainThread, "mainThread", 10000, NULL, 2, &mainThreadHandle, 0);
+  if(mainThreadHandle) {
+    vTaskDelete(mainThreadHandle);
+    mainThreadHandle = NULL;
+  }
+  setAll(LOW);
+
+  if(mode == BLANK) return;
+
+  xTaskCreatePinnedToCore(getModePtr(), "mainThread", 10000, NULL, 2, &mainThreadHandle, 0);
+}
+
+void createMqttThread() {
+  if(mqttThreadHandle) {
+    vTaskDelete(mqttThreadHandle);
+    mqttThreadHandle = NULL;
+  }
+   
+  xTaskCreatePinnedToCore(mqttThread, "mqttThread", 10000, NULL, 1, &mqttThreadHandle, 0);
 }
 
 void mqttThread(void* pvParameters) {
+  mqttClient.connect();
   for ever {
     updateTemperature();
     mqttClient.publish(MQTT_TOPIC, 1, true, String(temperature).c_str());
-    delay(1000 * 60);
+    delay(1000 * 60); // 1 min
+  }
+}
+
+void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
+  if(!timeClient.isTimeSet()) {
+    err = 4;
+    setAll(LOW);
+    while(!timeClient.isTimeSet()) {
+      timeClient.forceUpdate();
+      delay(100);
+    }
+  }
+  mode = lastMode;
+  createMainThread();
+  createMqttThread();
+}
+
+void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
+  err = 0;
+  if(mode != ERR) lastMode = mode;
+  mode = ERR;
+  createMainThread();
+  WiFi.reconnect();
+}
+
+void MQTTDisconnected(AsyncMqttClientDisconnectReason reason) {
+  while(WiFi.isConnected()) {
+    if(mqttClient.connected()) return;
+    createMqttThread();
+    delay(1000 * 30);
   }
 }
 
 //// MAIN
 
 void setup() {
-//  Serial.begin(115200);
+//  Serial.begin(115200); Serial.println("setup");
   
   for(int col = 0; col < LEDS_COLS; col++) {
     for(int row = 0; row < LEDS_ROWS; row++) {
@@ -214,30 +263,26 @@ void setup() {
   setAll(LOW);
 
   button.setDebounceTime(DEBOUNCE_TIME);
+  
+  WiFi.setHostname("bcdClock");
+  WiFi.onEvent(WiFiStationConnected, SYSTEM_EVENT_STA_CONNECTED);
+  WiFi.onEvent(WiFiStationDisconnected, SYSTEM_EVENT_STA_DISCONNECTED);
+  WiFi.begin(HOME_SSID, HOME_PASSWORD);
 
+  timeClient.begin();
+  
   thermometer.begin();
   thermometer.setResolution(9);
 
-  WiFi.begin(HOME_SSID, HOME_PASSWORD);
-  while(WiFi.status() != WL_CONNECTED) {
-    LEDS[0][0] = !LEDS[0][0];
-    LEDS[0][1] = !LEDS[0][0];
-    setLeds();
-    delay(250);
-  }
-  
-  timeClient.begin();
   timeClient.setTimeOffset(GMT_OFFSET);
-
   mqttClient.setServer(MQTT_HOST, MQTT_PORT);
   mqttClient.setCredentials(MQTT_USER, MQTT_PASSWORD);
-  mqttClient.connect();
+  mqttClient.onDisconnect(MQTTDisconnected);
 
   createMainThread();
-  xTaskCreatePinnedToCore(mqttThread, "mqttThread", 10000, NULL, 1, &mqttThreadHandle, 0);
 }
 
-void loop() {
+void loop() {  
   //// BUTTON
   if(pressedTs > 0) {
     int pressedFor = millis() - pressedTs;
@@ -255,11 +300,6 @@ void loop() {
     int pressedFor = millis() - pressedTs;
     if(pressedFor < 500) {
       changeMode();
-      
-      if(mainThreadHandle)
-        vTaskDelete(mainThreadHandle);
-      setAll(LOW);
-      createMainThread();
     }
     pressedTs = 0;
   }
@@ -268,22 +308,19 @@ void loop() {
   setLeds();
   switch(brightness) {
     case B_FULL:
-      delay(1);
       break;
     case B_HIGH:
       delay(1);
       disableLeds();
-      delay(5);
+      delay(4);
       break;
     case B_MEDIUM:
       ets_delay_us(20);
       disableLeds();
-      delay(1);
       break;
     case B_LOW:
       disableLeds();
-//      delay(1);
-      ets_delay_us(1 * 1000);
       break;
   }
+  delay(1);
 }
