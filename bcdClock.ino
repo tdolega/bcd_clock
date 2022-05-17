@@ -19,9 +19,6 @@ const char* MQTT_PASSWORD = "CHANGE_ME_MQTT_PASSWORD";
 const char* MQTT_TOPIC    = "bcdClock/temp";
 AsyncMqttClient mqttClient;
 
-const int GMT = +1; // Polska
-const int GMT_OFFSET = GMT * 3600; 
-
 const int LEDS_COLS = 6;
 const int LEDS_ROWS = 4;
 int LEDS[LEDS_COLS][LEDS_ROWS]; // LEDs states
@@ -219,6 +216,16 @@ void mqttThread(void* pvParameters) {
   }
 }
 
+int getGmtOffset() {
+  putenv("TZ=Europe/Warsaw");
+  time_t rawtime = timeClient.getEpochTime();
+  struct tm timeinfo;
+  time(&rawtime);
+  localtime_r(&rawtime, &timeinfo);
+  int isdaylighttime = timeinfo.tm_isdst;
+  return isdaylighttime ? 1 : 2;
+}
+
 void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
   if(!timeClient.isTimeSet()) {
     err = 4;
@@ -228,6 +235,7 @@ void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
       delay(100);
     }
   }
+  timeClient.setTimeOffset(getGmtOffset() * 3600);
   mode = lastMode;
   createMainThread();
   createMqttThread();
@@ -236,8 +244,10 @@ void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
 void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
   err = 0;
   if(mode != ERR) lastMode = mode;
-  mode = ERR;
-  createMainThread();
+  if(mode != BLANK) {
+    mode = ERR;
+    createMainThread();
+  }
   WiFi.reconnect();
 }
 
@@ -274,7 +284,6 @@ void setup() {
   thermometer.begin();
   thermometer.setResolution(9);
 
-  timeClient.setTimeOffset(GMT_OFFSET);
   mqttClient.setServer(MQTT_HOST, MQTT_PORT);
   mqttClient.setCredentials(MQTT_USER, MQTT_PASSWORD);
   mqttClient.onDisconnect(MQTTDisconnected);
