@@ -6,8 +6,14 @@
 #include <WiFiUdp.h>
 #include <NTPClient.h>
 #include <AsyncMqttClient.h>
+#include <EEPROM.h>
 
 #define ever (;;)
+#define kHz * 1000
+#define s   * 1000
+#define m   * 60 s
+
+#define EEPROM_SIZE 1
 
 const char* HOME_SSID     = "CHANGE_ME_WIFI_SSID";
 const char* HOME_PASSWORD = "CHANGE_ME_WIFI_PASSWORD";
@@ -19,18 +25,22 @@ const char* MQTT_PASSWORD = "CHANGE_ME_MQTT_PASSWORD";
 const char* MQTT_TOPIC    = "bcdClock/temp";
 AsyncMqttClient mqttClient;
 
+const char* TZ = "TZ=Europe/Warsaw";
+const int GMT_OFFSET_DAYLIGHT = 1;
+const int GMT_OFFSET_NORMAL = 2;
+
 const int LEDS_COLS = 6;
 const int LEDS_ROWS = 4;
 int LEDS[LEDS_COLS][LEDS_ROWS]; // LEDs states
 const int NO = -1; // no LED on this position
 const int GPIO_DIGITS[LEDS_COLS][LEDS_ROWS] = { // position to GPIO mapping
                     // PCB trace:
-  {21, 17, NO, NO}, // 5 9
+  {21, 17, NO, NO}, //  5  9
   { 4, 14, 16, 27}, // 11 16 10 17
-  {19,  2, 13, NO}, // 6 12 14
-  {18, 22, 26, 15}, // 7 2 18 13
-  {23, 12,  3, NO}, // 1 15 4
-  { 5,  1, 25, 33}  // 8 3 19 20
+  {19,  2, 13, NO}, //  6 12 14
+  {18, 22, 26, 15}, //  7  2 18 13
+  {23, 12,  3, NO}, //  1 15  4
+  { 5,  1, 25, 33}  //  8  3 19 20
 };
 const int digitToBCD[10][LEDS_ROWS] = {
   { LOW,  LOW,  LOW,  LOW}, // 0
@@ -45,11 +55,16 @@ const int digitToBCD[10][LEDS_ROWS] = {
   {HIGH,  LOW,  LOW, HIGH}, // 9
 };
 
+const int PWM_CHANNEL_OFF = 0;
+const int PWM_CHANNEL_ON = 1;
+const int PWM_FREQUENCY = 10 kHz;
+const int PWM_RESOLUTION = 8;
+
 typedef enum Brightness {
-  B_FULL,
-  B_HIGH,
-  B_MEDIUM,
-  B_LOW,
+  B_FULL = 255,
+  B_HIGH = 80,
+  B_MEDIUM = 20,
+  B_LOW = 1,
 } Brightness;
 Brightness brightness = B_HIGH;
 void changeBrightness() {
@@ -59,6 +74,7 @@ void changeBrightness() {
     case B_MEDIUM:  brightness = B_LOW;     break;
     case B_LOW:     brightness = B_FULL;    break;
   }
+  ledcWrite(PWM_CHANNEL_ON, brightness);
 }
 
 typedef enum Modes {
@@ -76,6 +92,8 @@ void changeMode() {
       case BLANK:        mode = CLOCK;         break;
       case ERR:          break;
     }
+    EEPROM.write(0, mode);
+    EEPROM.commit();
     createMainThread();
 }
 
@@ -105,6 +123,7 @@ void setAll(int state) {
   for(int col = 0; col < LEDS_COLS; col++)
     for(int row = 0; row < LEDS_ROWS; row++)
       LEDS[col][row] = state;
+  setLeds();
 }
 
 void setDigit(int col, int digit) {
@@ -119,7 +138,7 @@ void setNumber(int group, int number) {
 }
 
 void updateTemperature() {
-  if(millis() - temperatureTs < 1000) return;
+  if(millis() - temperatureTs < 2 s) return;
   temperatureTs = millis();
   thermometer.requestTemperatures();
   temperature = thermometer.getTempCByIndex(0);
@@ -127,23 +146,33 @@ void updateTemperature() {
 
 //// MODES
 
+int lastSeconds;
 void modeClock(void* pvParameters) {
   for ever {
     timeClient.update();
-    setNumber(0, timeClient.getHours());
-    setNumber(1, timeClient.getMinutes());
-    setNumber(2, timeClient.getSeconds());
+    if(lastSeconds != timeClient.getSeconds()) {
+      lastSeconds = timeClient.getSeconds();
+      setNumber(0, timeClient.getHours());
+      setNumber(1, timeClient.getMinutes());
+      setNumber(2, timeClient.getSeconds());
+      setLeds();
+    }
     delay(100);
   }
 }
 
 void modeThermometer(void* pvParameters) {
+  // don't lag on start
+  setNumber(1, abs(temperature));
+  setLeds();
+  
   for ever {
     updateTemperature();
     bool isNegative = temperature < 0;
     LEDS[0][1] = LEDS[1][1] = isNegative ? HIGH : LOW;
     setNumber(1, abs(temperature));
-    delay(2000);
+    setLeds();
+    delay(5 s);
   }
 }
 
@@ -160,7 +189,8 @@ void setLeds() {
   for(int col = 0; col < LEDS_COLS; col++){
     for(int row = 0; row < LEDS_ROWS; row++) {
       if(GPIO_DIGITS[col][row] == NO) continue;
-      digitalWrite(GPIO_DIGITS[col][row], LEDS[col][row]);
+      int channel = LEDS[col][row] ? PWM_CHANNEL_ON : PWM_CHANNEL_OFF;
+      ledcAttachPin(GPIO_DIGITS[col][row], channel);
     }
   }
 }
@@ -169,7 +199,7 @@ void disableLeds() {
   for(int col = 0; col < LEDS_COLS; col++){
     for(int row = 0; row < LEDS_ROWS; row++) {
       if(GPIO_DIGITS[col][row] == NO) continue;
-      digitalWrite(GPIO_DIGITS[col][row], LOW);
+      ledcAttachPin(GPIO_DIGITS[col][row], PWM_CHANNEL_OFF);
     }
   }
 }
@@ -204,6 +234,7 @@ void createMqttThread() {
     mqttThreadHandle = NULL;
   }
    
+  return; // FIXME
   xTaskCreatePinnedToCore(mqttThread, "mqttThread", 10000, NULL, 1, &mqttThreadHandle, 0);
 }
 
@@ -211,19 +242,22 @@ void mqttThread(void* pvParameters) {
   mqttClient.connect();
   for ever {
     updateTemperature();
-    mqttClient.publish(MQTT_TOPIC, 1, true, String(temperature).c_str());
-    delay(1000 * 60); // 1 min
+
+    delay(5 s);
+    mqttClient.publish(MQTT_TOPIC, 1, true, String(temperature, 3).c_str());
+    delay(1 m); // 1 min
   }
 }
 
 int getGmtOffset() {
-  putenv("TZ=Europe/Warsaw");
+  return GMT_OFFSET_DAYLIGHT; // FIXME
+  putenv((char *) TZ);
   time_t rawtime = timeClient.getEpochTime();
   struct tm timeinfo;
   time(&rawtime);
   localtime_r(&rawtime, &timeinfo);
-  int isdaylighttime = timeinfo.tm_isdst;
-  return isdaylighttime ? 1 : 2;
+  int isDaylightTime = timeinfo.tm_isdst;
+  return isDaylightTime ? GMT_OFFSET_DAYLIGHT : GMT_OFFSET_NORMAL;
 }
 
 void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
@@ -252,10 +286,11 @@ void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
 }
 
 void MQTTDisconnected(AsyncMqttClientDisconnectReason reason) {
+  return;
   while(WiFi.isConnected()) {
     if(mqttClient.connected()) return;
     createMqttThread();
-    delay(1000 * 30);
+    delay(30 s);
   }
 }
 
@@ -263,30 +298,39 @@ void MQTTDisconnected(AsyncMqttClientDisconnectReason reason) {
 
 void setup() {
 //  Serial.begin(115200); Serial.println("setup");
+
+  // setup LED
+  ledcSetup(PWM_CHANNEL_OFF, PWM_FREQUENCY, PWM_RESOLUTION);
+  ledcSetup(PWM_CHANNEL_ON, PWM_FREQUENCY, PWM_RESOLUTION);
+  ledcWrite(PWM_CHANNEL_OFF, 0);
+  ledcWrite(PWM_CHANNEL_ON, brightness);
   
-  for(int col = 0; col < LEDS_COLS; col++) {
-    for(int row = 0; row < LEDS_ROWS; row++) {
-      if(GPIO_DIGITS[col][row] == NO) continue;
-      pinMode(GPIO_DIGITS[col][row], OUTPUT);
-    }
-  }
   setAll(LOW);
 
+  // setup button
   button.setDebounceTime(DEBOUNCE_TIME);
-  
+
+  // setup thermometer
+  thermometer.begin();
+  thermometer.setResolution(12);
+
+  // setup WiFi
   WiFi.setHostname("bcdClock");
-  WiFi.onEvent(WiFiStationConnected, SYSTEM_EVENT_STA_CONNECTED);
-  WiFi.onEvent(WiFiStationDisconnected, SYSTEM_EVENT_STA_DISCONNECTED);
+  WiFi.onEvent(WiFiStationConnected, ARDUINO_EVENT_WIFI_STA_CONNECTED);
+  WiFi.onEvent(WiFiStationDisconnected, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   WiFi.begin(HOME_SSID, HOME_PASSWORD);
 
+  // setup time
   timeClient.begin();
-  
-  thermometer.begin();
-  thermometer.setResolution(9);
 
-  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
-  mqttClient.setCredentials(MQTT_USER, MQTT_PASSWORD);
-  mqttClient.onDisconnect(MQTTDisconnected);
+  // setup MQTT // FIXME
+  // mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+  // mqttClient.setCredentials(MQTT_USER, MQTT_PASSWORD);
+  // mqttClient.onDisconnect(MQTTDisconnected);
+
+  // setup EEPROM
+  EEPROM.begin(EEPROM_SIZE);
+  lastMode = (Modes) EEPROM.read(0);
 
   createMainThread();
 }
@@ -312,24 +356,6 @@ void loop() {
     }
     pressedTs = 0;
   }
-  
-  //// LEDS
-  setLeds();
-  switch(brightness) {
-    case B_FULL:
-      break;
-    case B_HIGH:
-      delay(1);
-      disableLeds();
-      delay(4);
-      break;
-    case B_MEDIUM:
-      ets_delay_us(20);
-      disableLeds();
-      break;
-    case B_LOW:
-      disableLeds();
-      break;
-  }
-  delay(1);
+
+  delay(21);
 }
