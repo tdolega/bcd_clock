@@ -7,9 +7,8 @@
 
 // online
 #include <WiFi.h>
-#include <WiFiUdp.h>
-#include <NTPClient.h>
 #include <AsyncMqttClient.h>
+#include "time.h"
 
 //// DEFINES
 
@@ -31,30 +30,27 @@ const char* MQTT_PASSWORD = "CHANGE_ME_MQTT_PASSWORD";
 const char* MQTT_TOPIC    = "bcdClock/temp";
 
 const char* TIMEZONE_ENV  = "CET-1CEST,M3.5.0,M10.5.0/3"; // Europe/Warsaw according to https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
-const int   GMT_OFFSET_SUMMER = 2;
-const int   GMT_OFFSET_WINTER = 1;
+const char* NTP_SERVER    = "pool.ntp.org";
 
 //// 50/50 CONFIG
 
 const int PWM_FREQUENCY          = 10 kHz;
 const int PWM_RESOLUTION         = 8;
 
-const int BUTTON_DEBOUNCE_MS     = 50;
-
 const int THERMOMETER_RESOLUTION = 12; // 9-12 [bits]
 
 const int MAIN_LOOP_DELAY_MS     = 20;
 
-const int LONG_PRESS_INITIAL_MS  = 1000;
-const int LONG_PRESS_REPEAT_MS   = 500;
+const int BUTTON_DEBOUNCE_MS     = MAIN_LOOP_DELAY_MS - 1;
+
+const int LONG_PRESS_INITIAL_MS  = 800;
+const int LONG_PRESS_REPEAT_MS   = 400;
 
 const int THERMOMETER_READING_MS = 5 s; // don't try to read temperature more often than this
 
 const int BACKGROUND_THREAD_CORE = 0;
 const int BACKGROUND_THREAD_PRIORITY = 1; // 1 - low, 5 - high
 const int BACKGROUND_THREAD_STACK_SIZE = 10000;
-
-const int TIME_UPDATE_INTERVAL_MS = 30 m;
 
 //// STATIC CONFIG
 
@@ -133,9 +129,6 @@ DallasTemperature thermometer(&one_wire_thermometer);
 
 ezButton button(GPIO_PIN_BUTTON);
 
-WiFiUDP ntpUDP;
-NTPClient time_client(ntpUDP);
-
 AsyncMqttClient mqtt_client;
 
 //// FUNCTIONS
@@ -191,15 +184,6 @@ void set_leds() {
   }
 }
 
-int get_timezone_offset() {
-  struct tm timeinfo;
-  if(!getLocalTime(&timeinfo)){
-    Serial.println("Failed to obtain time");
-    return 0;
-  }
-  return timeinfo.tm_isdst ? GMT_OFFSET_WINTER : GMT_OFFSET_SUMMER;
-}
-
 void update_temperature() {
   if(millis() - temperature_request_ts < THERMOMETER_READING_MS) return;
   temperature_request_ts = millis();
@@ -211,9 +195,9 @@ void update_temperature() {
 //// RUNTIME
 
 void display_clock() {
-  time_client.update();
+  struct tm timeinfo;
 
-  if (!time_client.isTimeSet()) {
+  if (!getLocalTime(&timeinfo)) {
     LEDS[0][0] = HIGH;
     LEDS[0][1] = WiFi.isConnected() ? HIGH : LOW;
     set_leds();
@@ -221,14 +205,13 @@ void display_clock() {
   }
 
   // update screen only when needed
-  if(last_displayed_seconds == time_client.getSeconds()) return;
+  if(last_displayed_seconds == timeinfo.tm_sec) return;
+  last_displayed_seconds = timeinfo.tm_sec;
 
-  set_number(0, time_client.getHours());
-  set_number(1, time_client.getMinutes());
-  set_number(2, time_client.getSeconds());
+  set_number(0, timeinfo.tm_hour);
+  set_number(1, timeinfo.tm_min);
+  set_number(2, timeinfo.tm_sec);
   set_leds();
-
-  last_displayed_seconds = time_client.getSeconds();
 }
 
 void display_temperature() {
@@ -248,9 +231,9 @@ void display_temperature() {
 void background_thread(void* pvParameters) {
   for ever {
     update_temperature();
-    delay(5 s);
+    delay(35 s);
     mqtt_client.publish(MQTT_TOPIC, 1, true, String(temperature_reading_celsius, 2).c_str());
-    delay(1 m);
+    delay(35 s);
   }
 }
 
@@ -258,20 +241,11 @@ void mqtt_connect_loop() {
   while(!mqtt_client.connected()) {
     if(!WiFi.isConnected()) return;
     mqtt_client.connect();
-    delay(500);
+    delay(10 s);
   }
 }
 
 void e_wifi_connected(WiFiEvent_t event, WiFiEventInfo_t info) {
-  if (!time_client.isTimeSet()) {
-    while(!time_client.isTimeSet()) {
-      if(!WiFi.isConnected()) return;
-      time_client.update();
-      delay(500);
-    }
-    time_client.setTimeOffset(get_timezone_offset() * 60 m);
-  }
-  
   mqtt_connect_loop();
 }
 
@@ -312,7 +286,7 @@ void setup() {
   mqtt_client.setCredentials(MQTT_USER, MQTT_PASSWORD);
 
   // setup time
-  time_client.setUpdateInterval(TIME_UPDATE_INTERVAL_MS);
+  configTime(0, 0, NTP_SERVER);
   setenv("TZ", TIMEZONE_ENV, 1);
   tzset();
 
@@ -347,7 +321,7 @@ void loop() {
     int pressed_for = millis() - button_pressed_ts;
     if (pressed_for > LONG_PRESS_INITIAL_MS) {
       change_to_next_brightness_level();
-      button_pressed_ts -= LONG_PRESS_REPEAT_MS;
+      button_pressed_ts += LONG_PRESS_REPEAT_MS;
     }
   }
 
