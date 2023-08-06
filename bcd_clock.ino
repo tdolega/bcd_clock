@@ -113,7 +113,7 @@ int LEDS[LEDS_COLS][LEDS_ROWS]; // LEDs states
 
 int button_pressed_ts = 0; // 0: button is not pressed, >0: ts of button press start
 
-float temperature_reading_celsius = 0.0;
+float temperature_reading_celsius = -1024.0;
 int temperature_reading_celsius_floor = 0;
 int temperature_request_ts = 0;
 
@@ -186,6 +186,10 @@ void set_leds() {
 
 void update_temperature() {
   if(millis() - temperature_request_ts < THERMOMETER_READING_MS) return;
+  update_temperature_force();
+}
+
+void update_temperature_force() {
   temperature_request_ts = millis();
   thermometer.requestTemperatures();
   temperature_reading_celsius = thermometer.getTempCByIndex(THERMOMETER_ONE_WIRE_IDX);
@@ -201,6 +205,11 @@ void display_clock() {
     LEDS[0][0] = HIGH;
     LEDS[0][1] = WiFi.isConnected() ? HIGH : LOW;
     set_leds();
+    
+    // setup time
+    configTime(0, 0, NTP_SERVER);
+    tzset();
+    
     return;
   }
 
@@ -270,10 +279,6 @@ void setup() {
   // setup button
   button.setDebounceTime(BUTTON_DEBOUNCE_MS);
 
-  // setup thermometer
-  thermometer.begin();
-  thermometer.setResolution(THERMOMETER_RESOLUTION);
-
   // setup Wi-Fi
   WiFi.onEvent(e_wifi_connected   , ARDUINO_EVENT_WIFI_STA_GOT_IP      );
   WiFi.onEvent(e_wifi_disconnected, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
@@ -285,10 +290,13 @@ void setup() {
   mqtt_client.setServer(MQTT_HOST, MQTT_PORT);
   mqtt_client.setCredentials(MQTT_USER, MQTT_PASSWORD);
 
-  // setup time
-  configTime(0, 0, NTP_SERVER);
+  // timezone env var
   setenv("TZ", TIMEZONE_ENV, 1);
-  tzset();
+  
+  // setup thermometer
+  thermometer.begin();
+  thermometer.setResolution(THERMOMETER_RESOLUTION);
+  update_temperature_force();
 
   xTaskCreatePinnedToCore(
     &background_thread,           // function
