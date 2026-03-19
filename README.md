@@ -31,9 +31,10 @@ To eliminuje wyścigi między rdzeniami i poprawia stabilność przy długim upt
 Tryby (`Modes`):
 - `M_CLOCK` - zegar,
 - `M_THERMOMETER` - temperatura,
+- `M_PINGTEST` - test opóźnienia ICMP do `8.8.8.8`,
 - `M_BLANK` - wygaszony ekran.
 
-Kolejność lokalnego przełączania: `clock -> thermometer -> blank -> clock`.
+Kolejność lokalnego przełączania: `clock -> thermometer -> pingtest -> blank -> clock`.
 
 ## Sterowanie lokalne (przycisk)
 Przycisk na `GPIO35`:
@@ -68,7 +69,7 @@ Urządzenie wspiera dwa typy topiców:
 
 ### Topic: komendy
 - `bcdClock/cmd/mode`
-  payload: `clock`, `thermometer`, `blank`, `temp`, `off`, `next`
+  payload: `clock`, `thermometer`, `pingtest`, `ping`, `blank`, `temp`, `off`, `next`
 - `bcdClock/cmd/brightness`
   payload: `full`, `high`, `medium`, `low`, `4095`, `128`, `8`, `2`, `next`
 - `bcdClock/cmd/state`
@@ -76,7 +77,7 @@ Urządzenie wspiera dwa typy topiców:
 
 ### Topic: stan
 - `bcdClock/state/online` (`1` online, `0` offline, retained + Last Will)
-- `bcdClock/state/mode` (`clock|thermometer|blank`, retained)
+- `bcdClock/state/mode` (`clock|thermometer|pingtest|blank`, retained)
 - `bcdClock/state/brightness` (`full|high|medium|low`, retained)
 - `bcdClock/state/temperature` (np. `23.75` lub `nan`, retained)
 - `bcdClock/state/json` (JSON ze stanem, retained)
@@ -141,6 +142,18 @@ To chroni przed przypadkowym traktowaniem topików `state/*` jako kanału steruj
 - czekanie na konwersję: `800 ms`,
 - publikacja temperatury do MQTT: co `70000 ms` (70 sekund).
 
+### Ping test
+- cel ICMP: `8.8.8.8`,
+- interwał pomiaru: co `10000 ms` (10 sekund),
+- timeout pojedynczego ping: `1000 ms`,
+- wyświetlanie wartości: środkowy i prawy panel (`col2..col5`) jako liczba `0000..9999` ms,
+- wskaźnik jakości: lewy panel, druga kolumna (`col1`, od dołu):
+  - `< 25 ms` -> 1 LED,
+  - `< 50 ms` -> 2 LED,
+  - `< 100 ms` -> 3 LED,
+  - `>= 100 ms` -> 4 LED,
+- brak odpowiedzi (np. brak internetu): wyświetlacz trybu pingtest pozostaje wygaszony.
+
 ## Stan systemu po restarcie
 
 Po załadowaniu się firmwaru urządzenie przechodzi przez następujące etapy (typowo 5–30 sekund):
@@ -193,6 +206,11 @@ Po załadowaniu się firmwaru urządzenie przechodzi przez następujące etapy (
 - MQTT reconnectuje się co 5 sekund, aż do powodzenia
 - Publikacja stanu wznawia się automatycznie po reconneccie
 
+### Tryb pingtest bez internetu
+- Brak odpowiedzi ICMP powoduje brak wyświetlania wyniku (`brak LED`),
+- Kolejny test wykonywany jest co 10 sekund,
+- Po odzyskaniu internetu wynik pojawia się automatycznie przy kolejnym cyklu ping.
+
 ### Restart urządzenia
 - Wszystkie LED gasną na 500 ms (inicjalizacja)
 - W kolejnym 1–3 sekundach: pojawia się diagnostyka (GPIO21, GPIO17, czasem GPIO4)
@@ -216,7 +234,8 @@ Po załadowaniu się firmwaru urządzenie przechodzi przez następujące etapy (
 - obsługa okna restore MQTT (pierwsze 1500 ms po MQTT connect),
 - cykl odczytu DS18B20 (request co 5 s, wait 800 ms na konwersję),
 - publikacja okresowa temperatury (co 70 s),
-- render wybranego trybu (clock/thermometer/blank),
+- cykl pingtest (ICMP do 8.8.8.8 co 10 s),
+- render wybranego trybu (clock/thermometer/pingtest/blank),
 - opóźnienie pętli: `2 ms`.
 
 ## Pinout

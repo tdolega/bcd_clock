@@ -11,6 +11,8 @@
 #include "time.h"
 #include <ctype.h>
 #include <string.h>
+#include <ping/ping_sock.h>
+#include <lwip/ip_addr.h>
 #include "runtime_config.h"
 
 //// DEFINES
@@ -67,6 +69,11 @@ const int8_t PWM_CHANNEL_LEDS_ON  = 1;
 
 const int THERMOMETER_ONE_WIRE_IDX = 0;
 
+const uint32_t PING_INTERVAL_MS = 10 s;
+const uint32_t PING_TIMEOUT_MS = 1000;
+const char* const PING_TARGET_IP = "8.8.8.8";
+const int PING_NO_RESULT = -1;
+
 //// STATE
 
 typedef enum Brightness {
@@ -79,6 +86,7 @@ typedef enum Brightness {
 typedef enum Modes {
   M_CLOCK,
   M_THERMOMETER,
+  M_PINGTEST,
   M_BLANK,
 } Modes;
 
@@ -91,6 +99,7 @@ Modes mode = M_CLOCK;
 int last_displayed_seconds = -1;
 int last_displayed_temperature_signature = -1024;
 int last_clock_status_signature = -1024;
+int last_displayed_ping_signature = -1024;
 
 uint32_t button_pressed_ts = 0;
 bool button_long_press_handled = false;
@@ -98,6 +107,14 @@ bool button_long_press_handled = false;
 float temperature_celsius = 0.0f;
 int temperature_celsius_abs_int = ERROR_DISPLAY_VALUE;
 bool temperature_valid = false;
+
+int ping_latency_ms = PING_NO_RESULT;
+uint32_t ping_next_due_ts = 0;
+bool ping_session_active = false;
+esp_ping_handle_t ping_session_handle = NULL;
+volatile bool ping_reply_received = false;
+volatile uint32_t ping_reply_time_ms = 0;
+volatile bool ping_session_finished = false;
 
 bool temperature_conversion_in_progress = false;
 uint32_t temperature_conversion_started_ts = 0;
@@ -201,6 +218,7 @@ const char* mode_to_string(Modes current_mode) {
   switch(current_mode) {
     case M_CLOCK:       return "clock";
     case M_THERMOMETER: return "thermometer";
+    case M_PINGTEST:    return "pingtest";
     case M_BLANK:       return "blank";
   }
   return "clock";
@@ -220,6 +238,7 @@ void invalidate_display_cache() {
   last_displayed_seconds = -1;
   last_displayed_temperature_signature = -1024;
   last_clock_status_signature = -1024;
+  last_displayed_ping_signature = -1024;
 }
 
 void publish_mode_state();
@@ -252,7 +271,8 @@ void set_mode(Modes new_mode, bool publish_state = true) {
 void change_to_next_mode() {
   switch(mode) {
     case M_CLOCK:       set_mode(M_THERMOMETER); break;
-    case M_THERMOMETER: set_mode(M_BLANK);       break;
+    case M_THERMOMETER: set_mode(M_PINGTEST);    break;
+    case M_PINGTEST:    set_mode(M_BLANK);       break;
     case M_BLANK:       set_mode(M_CLOCK);       break;
   }
 }
@@ -292,6 +312,11 @@ bool parse_and_set_mode(const char* token, bool publish_state = true) {
 
   if(strcmp(token, "thermometer") == 0 || strcmp(token, "m_thermometer") == 0 || strcmp(token, "temp") == 0) {
     set_mode(M_THERMOMETER, publish_state);
+    return true;
+  }
+
+  if(strcmp(token, "pingtest") == 0 || strcmp(token, "m_pingtest") == 0 || strcmp(token, "ping") == 0) {
+    set_mode(M_PINGTEST, publish_state);
     return true;
   }
 
@@ -397,6 +422,95 @@ void ensure_mqtt_connected(uint32_t now_ms) {
 
 //// SENSOR
 
+void stop_ping_session() {
+  if(!ping_session_active || ping_session_handle == NULL) return;
+
+  esp_ping_stop(ping_session_handle);
+  esp_ping_delete_session(ping_session_handle);
+  ping_session_handle = NULL;
+  ping_session_active = false;
+}
+
+void on_ping_success(esp_ping_handle_t hdl, void* args) {
+  (void)args;
+
+  uint32_t elapsed_ms = 0;
+  uint32_t size = sizeof(elapsed_ms);
+  if(esp_ping_get_profile(hdl, ESP_PING_PROF_TIMEGAP, &elapsed_ms, size) != ESP_OK) return;
+
+  ping_reply_time_ms = elapsed_ms;
+  ping_reply_received = true;
+}
+
+void on_ping_timeout(esp_ping_handle_t hdl, void* args) {
+  (void)hdl;
+  (void)args;
+}
+
+void on_ping_end(esp_ping_handle_t hdl, void* args) {
+  (void)hdl;
+  (void)args;
+  ping_session_finished = true;
+}
+
+void start_ping_session() {
+  esp_ping_config_t ping_config = ESP_PING_DEFAULT_CONFIG();
+  ping_config.count = 1;
+  ping_config.interval_ms = 1;
+  ping_config.timeout_ms = PING_TIMEOUT_MS;
+
+  if(!ipaddr_aton(PING_TARGET_IP, &ping_config.target_addr)) return;
+
+  esp_ping_callbacks_t ping_callbacks;
+  memset(&ping_callbacks, 0, sizeof(ping_callbacks));
+  ping_callbacks.on_ping_success = on_ping_success;
+  ping_callbacks.on_ping_timeout = on_ping_timeout;
+  ping_callbacks.on_ping_end = on_ping_end;
+
+  ping_reply_received = false;
+  ping_reply_time_ms = 0;
+  ping_session_finished = false;
+
+  if(esp_ping_new_session(&ping_config, &ping_callbacks, &ping_session_handle) != ESP_OK) return;
+  if(esp_ping_start(ping_session_handle) != ESP_OK) {
+    esp_ping_delete_session(ping_session_handle);
+    ping_session_handle = NULL;
+    return;
+  }
+
+  ping_session_active = true;
+}
+
+void update_ping_cycle(uint32_t now_ms) {
+  if(mode != M_PINGTEST) {
+    stop_ping_session();
+    return;
+  }
+
+  if(!wifi_connected) {
+    ping_latency_ms = PING_NO_RESULT;
+    stop_ping_session();
+    ping_next_due_ts = now_ms;
+    return;
+  }
+
+  if(ping_session_active && ping_session_finished) {
+    ping_latency_ms = ping_reply_received ? (int)ping_reply_time_ms : PING_NO_RESULT;
+    stop_ping_session();
+    ping_next_due_ts = now_ms + PING_INTERVAL_MS;
+    return;
+  }
+
+  if(ping_session_active) return;
+  if(!due_ms(now_ms, ping_next_due_ts)) return;
+
+  start_ping_session();
+  if(!ping_session_active) {
+    ping_latency_ms = PING_NO_RESULT;
+    ping_next_due_ts = now_ms + PING_INTERVAL_MS;
+  }
+}
+
 bool is_valid_temperature(float value) {
   if(value == DEVICE_DISCONNECTED_C) return false;
   if(value < -55.0f || value > 125.0f) return false;
@@ -490,6 +604,39 @@ void display_temperature() {
   set_all(LOW);
   leds_state[0][1] = leds_state[1][1] = negative ? HIGH : LOW;
   set_number(1, value);
+  apply_leds();
+}
+
+void display_pingtest() {
+  int signature = ping_latency_ms;
+  if(last_displayed_ping_signature == signature) return;
+  last_displayed_ping_signature = signature;
+
+  set_all(LOW);
+
+  if(ping_latency_ms >= 0) {
+    int value = ping_latency_ms;
+    if(value > 9999) value = 9999;
+
+    set_digit(2, (value / 1000) % 10);
+    set_digit(3, (value / 100) % 10);
+    set_digit(4, (value / 10) % 10);
+    set_digit(5, value % 10);
+
+    int quality_leds = 1;
+    if(value >= 100) {
+      quality_leds = 4;
+    } else if(value >= 50) {
+      quality_leds = 3;
+    } else if(value >= 25) {
+      quality_leds = 2;
+    }
+
+    for(int row = 0; row < quality_leds; row++) {
+      leds_state[1][row] = HIGH;
+    }
+  }
+
   apply_leds();
 }
 
@@ -624,6 +771,7 @@ void on_wifi_connected(WiFiEvent_t event, WiFiEventInfo_t info) {
 
   wifi_connected = true;
   mqtt_connect_due_ts = millis();
+  ping_next_due_ts = millis();
 }
 
 void on_wifi_disconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
@@ -633,6 +781,8 @@ void on_wifi_disconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
   wifi_connected = false;
   mqtt_connected = false;
   mqtt_restore_active = false;
+  ping_latency_ms = PING_NO_RESULT;
+  stop_ping_session();
 }
 
 //// MQTT RESTORE
@@ -689,6 +839,7 @@ void setup() {
   uint32_t now_ms = millis();
   temperature_last_cycle_ts = now_ms - THERMOMETER_READING_INTERVAL_MS;
   temperature_next_publish_ts = now_ms + MQTT_TEMPERATURE_PUBLISH_INTERVAL_MS;
+  ping_next_due_ts = now_ms;
 }
 
 void loop() {
@@ -701,10 +852,12 @@ void loop() {
 
   update_temperature_cycle(now_ms);
   publish_periodic_temperature(now_ms);
+  update_ping_cycle(now_ms);
 
   switch(mode) {
     case M_CLOCK:       display_clock();       break;
     case M_THERMOMETER: display_temperature(); break;
+    case M_PINGTEST:    display_pingtest();    break;
     case M_BLANK:       break; // LEDy są czyszczone w momencie zmiany trybu (set_mode)
   }
 
