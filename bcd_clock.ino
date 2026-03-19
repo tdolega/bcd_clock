@@ -9,55 +9,34 @@
 #include <WiFi.h>
 #include <AsyncMqttClient.h>
 #include "time.h"
+#include <ctype.h>
+#include <string.h>
+#include "runtime_config.h"
 
 //// DEFINES
 
-#define ever (;;)
 #define kHz  * 1000
 #define s    * 1000
-#define m    * 60 s
 
-//// DYNAMIC CONFIG
+//// CONFIG
 
-const char* WIFI_SSID     = "CHANGE_ME_WIFI_SSID";
-const char* WIFI_PASSWORD = "CHANGE_ME_WIFI_PASSWORD";
-const char* HOSTNAME      = "bcdClock";
-
-const auto  MQTT_HOST     = IPAddress(0, 0, 0, 0);
-const int   MQTT_PORT     = 1883;
-const char* MQTT_USER     = "CHANGE_ME_MQTT_USER";
-const char* MQTT_PASSWORD = "CHANGE_ME_MQTT_PASSWORD";
-const char* MQTT_TOPIC    = "bcdClock/temp";
-
-const char* TIMEZONE_ENV  = "CET-1CEST,M3.5.0,M10.5.0/3"; // Europe/Warsaw according to https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
-const char* NTP_SERVER    = "pool.ntp.org";
-
-//// 50/50 CONFIG
-
-const uint32_t PWM_FREQUENCY     = 10 kHz;
-const uint8_t  PWM_RESOLUTION    = 12; // 1-20 [bits]
+const uint32_t PWM_FREQUENCY  = 10 kHz;
+const uint8_t  PWM_RESOLUTION = 12; // 1-20 [bits]
 
 const int THERMOMETER_RESOLUTION = 12; // 9-12 [bits]
 
-const int MAIN_LOOP_DELAY_MS     = 20;
+const int ERROR_DISPLAY_VALUE = 77; // Zastępcza wartość BCD na wypadek błędów czujnika
 
-const int BUTTON_DEBOUNCE_MS     = MAIN_LOOP_DELAY_MS - 1;
-
-const int LONG_PRESS_INITIAL_MS  = 800;
-const int LONG_PRESS_REPEAT_MS   = 400;
-
-const int THERMOMETER_READING_MS = 5 s; // don't try to read temperature more often than this
-
-const int BACKGROUND_THREAD_CORE = 0;
-const int BACKGROUND_THREAD_PRIORITY = 1; // 1 - low, 5 - high
-const int BACKGROUND_THREAD_STACK_SIZE = 10000;
-
-//// STATIC CONFIG
+const int MAIN_LOOP_DELAY_MS    = 2;
+const int BUTTON_DEBOUNCE_MS    = 50; // Standardowy niezależny czas debouncingu
+const int LONG_PRESS_INITIAL_MS = 800;
+const int LONG_PRESS_REPEAT_MS  = 400;
 
 const int LEDS_COLS = 6;
 const int LEDS_ROWS = 4;
-const int NO = -1; // no LED on this position
-const int GPIO_DIGITS[LEDS_COLS][LEDS_ROWS] = { // position to GPIO mapping
+const int NO = -1;
+
+const int GPIO_DIGITS[LEDS_COLS][LEDS_ROWS] = {
                     // PCB trace:
   {21, 17, NO, NO}, //  5  9
   { 4, 14, 16, 27}, // 11 16 10 17
@@ -66,7 +45,8 @@ const int GPIO_DIGITS[LEDS_COLS][LEDS_ROWS] = { // position to GPIO mapping
   {23, 12,  3, NO}, //  1 15  4
   { 5,  1, 25, 33}  //  8  3 19 20
 };
-const int digit_to_BCD[10][LEDS_ROWS] = {
+
+const int DIGIT_TO_BCD[10][LEDS_ROWS] = {
   { LOW,  LOW,  LOW,  LOW}, // 0
   {HIGH,  LOW,  LOW,  LOW}, // 1
   { LOW, HIGH,  LOW,  LOW}, // 2
@@ -87,44 +67,14 @@ const int8_t PWM_CHANNEL_LEDS_ON  = 1;
 
 const int THERMOMETER_ONE_WIRE_IDX = 0;
 
-//// VARIABLES
-
-int LEDS[LEDS_COLS][LEDS_ROWS]; // LEDs states
-
-int button_pressed_ts = 0; // 0: button is not pressed, >0: ts of button press start
-
-volatile float temperature_reading_celsius = -1024.0;
-volatile int temperature_reading_celsius_abs_int = 0;
-volatile int temperature_request_ts = 0;
-
-int last_displayed_seconds = -1024;
-int last_displayed_temperature = -1024;
-
-TaskHandle_t background_thread_handle = NULL;
-
-//// BRIGHTNESS
+//// STATE
 
 typedef enum Brightness {
-  // depends on PWM_RESOLUTION
-  B_FULL = (1 << PWM_RESOLUTION) - 1, // 4095 for 12 bits
+  B_FULL = (1 << PWM_RESOLUTION) - 1,
   B_HIGH = 128,
   B_MEDIUM = 8,
   B_LOW = 2,
 } Brightness;
-
-Brightness brightness = B_MEDIUM;
-
-void change_to_next_brightness_level() {
-  switch(brightness) {
-    case B_FULL:       brightness = B_HIGH;    break;
-    case B_HIGH:       brightness = B_MEDIUM;  break;
-    case B_MEDIUM:     brightness = B_LOW;     break;
-    case B_LOW:        brightness = B_FULL;    break;
-  }
-  ledcWriteChannel(PWM_CHANNEL_LEDS_ON, brightness);
-}
-
-//// MODES
 
 typedef enum Modes {
   M_CLOCK,
@@ -132,46 +82,96 @@ typedef enum Modes {
   M_BLANK,
 } Modes;
 
+int leds_state[LEDS_COLS][LEDS_ROWS];
+int8_t leds_channel_cache[LEDS_COLS][LEDS_ROWS];
+
+Brightness brightness = B_MEDIUM;
 Modes mode = M_CLOCK;
 
-void change_to_next_mode() {
-  switch(mode) {
-    case M_CLOCK:        mode = M_THERMOMETER;     break;
-    case M_THERMOMETER:  mode = M_BLANK;           break;
-    case M_BLANK:        mode = M_CLOCK;           break;
-  }
-  // force update on next loop
-  last_displayed_seconds = -1024;
-  last_displayed_temperature = -1024;
-  // clear screen
-  set_all(LOW);
-  apply_leds();
-}
+int last_displayed_seconds = -1;
+int last_displayed_temperature_signature = -1024;
+int last_clock_status_signature = -1024;
+
+uint32_t button_pressed_ts = 0;
+bool button_long_press_handled = false;
+
+float temperature_celsius = 0.0f;
+int temperature_celsius_abs_int = ERROR_DISPLAY_VALUE;
+bool temperature_valid = false;
+
+bool temperature_conversion_in_progress = false;
+uint32_t temperature_conversion_started_ts = 0;
+uint32_t temperature_last_cycle_ts = 0;
+uint32_t temperature_next_publish_ts = 0;
+
+bool wifi_connected = false;
+
+bool mqtt_connected = false;
+uint32_t mqtt_connect_due_ts = 0;
+
+bool mqtt_restore_active = false;
+uint32_t mqtt_restore_started_ts = 0;
+
+char mqtt_rx_topic[MQTT_RX_TOPIC_BUFFER_SIZE];
+char mqtt_rx_payload[MQTT_RX_PAYLOAD_BUFFER_SIZE];
+size_t mqtt_rx_payload_len = 0;
 
 //// OBJECTS
 
 OneWire one_wire_thermometer(GPIO_PIN_THERMOMETER);
 DallasTemperature thermometer(&one_wire_thermometer);
-
 ezButton button(GPIO_PIN_BUTTON);
-
 AsyncMqttClient mqtt_client;
 
-//// FUNCTIONS
+//// HELPERS
+
+bool elapsed_ms(uint32_t now_ms, uint32_t last_ms, uint32_t period_ms) {
+  return (uint32_t)(now_ms - last_ms) >= period_ms;
+}
+
+bool due_ms(uint32_t now_ms, uint32_t due_ts_ms) {
+  return (int32_t)(now_ms - due_ts_ms) >= 0;
+}
+
+void trim_and_lowercase(char* buffer) {
+  if(buffer == NULL) return;
+
+  size_t len = strlen(buffer);
+  size_t start = 0;
+
+  while(start < len && isspace((unsigned char)buffer[start])) start++;
+  while(len > start && isspace((unsigned char)buffer[len - 1])) len--;
+
+  size_t out = 0;
+  for(size_t i = start; i < len; i++) {
+    buffer[out++] = (char)tolower((unsigned char)buffer[i]);
+  }
+  buffer[out] = '\0';
+}
+
+//// LED CONTROL
 
 void set_all(int state) {
-  for(int col = 0; col < LEDS_COLS; col++)
-    for(int row = 0; row < LEDS_ROWS; row++)
-      LEDS[col][row] = state;
+  for(int col = 0; col < LEDS_COLS; col++) {
+    for(int row = 0; row < LEDS_ROWS; row++) {
+      leds_state[col][row] = state;
+    }
+  }
 }
 
 void set_digit(int col, int digit) {
+  if(col < 0 || col >= LEDS_COLS) return;
   if(digit < 0 || digit > 9) return;
-  for(int row = 0; row < LEDS_ROWS; row++)
-    LEDS[col][row] = digit_to_BCD[digit][row];
+
+  for(int row = 0; row < LEDS_ROWS; row++) {
+    leds_state[col][row] = DIGIT_TO_BCD[digit][row];
+  }
 }
 
 void set_number(int group, int number) {
+  if(number < 0) number = 0;
+  if(number > 99) number = 99;
+
   set_digit(group * 2 + 0, number / 10);
   set_digit(group * 2 + 1, number % 10);
 }
@@ -179,44 +179,297 @@ void set_number(int group, int number) {
 void apply_leds() {
   for(int col = 0; col < LEDS_COLS; col++) {
     for(int row = 0; row < LEDS_ROWS; row++) {
-      if(GPIO_DIGITS[col][row] == NO) continue;
-      int channel = LEDS[col][row] ? PWM_CHANNEL_LEDS_ON : PWM_CHANNEL_LEDS_OFF;
-      ledcDetach(GPIO_DIGITS[col][row]);
-      ledcAttachChannel(GPIO_DIGITS[col][row], PWM_FREQUENCY, PWM_RESOLUTION, channel);
+      int gpio = GPIO_DIGITS[col][row];
+      if(gpio == NO) continue;
+
+      int8_t desired_channel = leds_state[col][row] ? PWM_CHANNEL_LEDS_ON : PWM_CHANNEL_LEDS_OFF;
+      if(leds_channel_cache[col][row] == desired_channel) continue;
+
+      ledcDetach(gpio);
+      ledcAttachChannel(gpio, PWM_FREQUENCY, PWM_RESOLUTION, desired_channel);
+      leds_channel_cache[col][row] = desired_channel;
     }
   }
+
   ledcWriteChannel(PWM_CHANNEL_LEDS_OFF, 0);
   ledcWriteChannel(PWM_CHANNEL_LEDS_ON, brightness);
 }
 
-void update_temperature() {
-  if(millis() - temperature_request_ts < THERMOMETER_READING_MS) return;
-  update_temperature_force();
+//// MODE AND BRIGHTNESS
+
+const char* mode_to_string(Modes current_mode) {
+  switch(current_mode) {
+    case M_CLOCK:       return "clock";
+    case M_THERMOMETER: return "thermometer";
+    case M_BLANK:       return "blank";
+  }
+  return "clock";
 }
 
-void update_temperature_force() {
-  temperature_request_ts = millis();
-  thermometer.requestTemperatures();
-  temperature_reading_celsius = thermometer.getTempCByIndex(THERMOMETER_ONE_WIRE_IDX);
-  temperature_reading_celsius_abs_int = abs(int(temperature_reading_celsius));
+const char* brightness_to_string(Brightness current_brightness) {
+  switch(current_brightness) {
+    case B_FULL:   return "full";
+    case B_HIGH:   return "high";
+    case B_MEDIUM: return "medium";
+    case B_LOW:    return "low";
+  }
+  return "medium";
 }
 
-//// RUNTIME
+void invalidate_display_cache() {
+  last_displayed_seconds = -1;
+  last_displayed_temperature_signature = -1024;
+  last_clock_status_signature = -1024;
+}
 
-void display_clock() {
-  struct tm timeinfo;
+void publish_mode_state();
+void publish_brightness_state();
+void publish_temperature_state();
+void publish_state_json();
+void publish_full_state();
 
-  if (!getLocalTime(&timeinfo)) {
-    set_all(LOW);
-    LEDS[0][0] = HIGH;
-    LEDS[0][1] = WiFi.isConnected() ? HIGH : LOW;
-    apply_leds();    
+void set_mode(Modes new_mode, bool publish_state = true) {
+  if(mode == new_mode) {
+    if(publish_state) {
+      publish_mode_state();
+      publish_state_json();
+    }
     return;
   }
 
-  // update screen only when needed
+  mode = new_mode;
+  invalidate_display_cache();
+
+  set_all(LOW);
+  apply_leds();
+
+  if(publish_state) {
+    publish_mode_state();
+    publish_state_json();
+  }
+}
+
+void change_to_next_mode() {
+  switch(mode) {
+    case M_CLOCK:       set_mode(M_THERMOMETER); break;
+    case M_THERMOMETER: set_mode(M_BLANK);       break;
+    case M_BLANK:       set_mode(M_CLOCK);       break;
+  }
+}
+
+void set_brightness(Brightness new_brightness, bool publish_state = true) {
+  if(brightness == new_brightness) {
+    if(publish_state) {
+      publish_brightness_state();
+      publish_state_json();
+    }
+    return;
+  }
+
+  brightness = new_brightness;
+  ledcWriteChannel(PWM_CHANNEL_LEDS_ON, brightness);
+
+  if(publish_state) {
+    publish_brightness_state();
+    publish_state_json();
+  }
+}
+
+void change_to_next_brightness_level() {
+  switch(brightness) {
+    case B_FULL:   set_brightness(B_HIGH);   break;
+    case B_HIGH:   set_brightness(B_MEDIUM); break;
+    case B_MEDIUM: set_brightness(B_LOW);    break;
+    case B_LOW:    set_brightness(B_FULL);   break;
+  }
+}
+
+bool parse_and_set_mode(const char* token, bool publish_state = true) {
+  if(strcmp(token, "clock") == 0 || strcmp(token, "m_clock") == 0) {
+    set_mode(M_CLOCK, publish_state);
+    return true;
+  }
+
+  if(strcmp(token, "thermometer") == 0 || strcmp(token, "m_thermometer") == 0 || strcmp(token, "temp") == 0) {
+    set_mode(M_THERMOMETER, publish_state);
+    return true;
+  }
+
+  if(strcmp(token, "blank") == 0 || strcmp(token, "m_blank") == 0 || strcmp(token, "off") == 0) {
+    set_mode(M_BLANK, publish_state);
+    return true;
+  }
+
+  return false;
+}
+
+bool parse_and_set_brightness(const char* token, bool publish_state = true) {
+  if(strcmp(token, "full") == 0 || strcmp(token, "4095") == 0) {
+    set_brightness(B_FULL, publish_state);
+    return true;
+  }
+
+  if(strcmp(token, "high") == 0 || strcmp(token, "128") == 0) {
+    set_brightness(B_HIGH, publish_state);
+    return true;
+  }
+
+  if(strcmp(token, "medium") == 0 || strcmp(token, "8") == 0) {
+    set_brightness(B_MEDIUM, publish_state);
+    return true;
+  }
+
+  if(strcmp(token, "low") == 0 || strcmp(token, "2") == 0) {
+    set_brightness(B_LOW, publish_state);
+    return true;
+  }
+
+  return false;
+}
+
+//// MQTT PUBLISH
+
+void publish_mode_state() {
+  if(!mqtt_connected) return;
+  mqtt_client.publish(MQTT_TOPIC_STATE_MODE, 1, true, mode_to_string(mode));
+}
+
+void publish_brightness_state() {
+  if(!mqtt_connected) return;
+  mqtt_client.publish(MQTT_TOPIC_STATE_BRIGHTNESS, 1, true, brightness_to_string(brightness));
+}
+
+void publish_temperature_state() {
+  if(!mqtt_connected) return;
+
+  char payload[32];
+  if(temperature_valid) {
+    snprintf(payload, sizeof(payload), "%.2f", temperature_celsius);
+  } else {
+    snprintf(payload, sizeof(payload), "nan");
+  }
+  mqtt_client.publish(MQTT_TOPIC_STATE_TEMPERATURE, 1, true, payload);
+}
+
+void publish_state_json() {
+  if(!mqtt_connected) return;
+
+  char payload[160];
+  if(temperature_valid) {
+    snprintf(
+      payload,
+      sizeof(payload),
+      "{\"mode\":\"%s\",\"brightness\":\"%s\",\"temperature_c\":%.2f}",
+      mode_to_string(mode),
+      brightness_to_string(brightness),
+      temperature_celsius
+    );
+  } else {
+    snprintf(
+      payload,
+      sizeof(payload),
+      "{\"mode\":\"%s\",\"brightness\":\"%s\",\"temperature_c\":null}",
+      mode_to_string(mode),
+      brightness_to_string(brightness)
+    );
+  }
+
+  mqtt_client.publish(MQTT_TOPIC_STATE_JSON, 1, true, payload);
+}
+
+void publish_full_state() {
+  publish_mode_state();
+  publish_brightness_state();
+  publish_temperature_state();
+  publish_state_json();
+}
+
+//// CONNECTIVITY
+
+void ensure_mqtt_connected(uint32_t now_ms) {
+  if(!wifi_connected) return;
+  if(mqtt_connected) return;
+  if(!due_ms(now_ms, mqtt_connect_due_ts)) return;
+
+  mqtt_client.connect();
+  mqtt_connect_due_ts = now_ms + MQTT_RETRY_INTERVAL_MS;
+}
+
+//// SENSOR
+
+bool is_valid_temperature(float value) {
+  if(value == DEVICE_DISCONNECTED_C) return false;
+  if(value < -55.0f || value > 125.0f) return false;
+  return true;
+}
+
+void update_temperature_cycle(uint32_t now_ms) {
+  if(!temperature_conversion_in_progress) {
+    if(!elapsed_ms(now_ms, temperature_last_cycle_ts, THERMOMETER_READING_INTERVAL_MS)) return;
+
+    thermometer.requestTemperatures();
+    temperature_conversion_in_progress = true;
+    temperature_conversion_started_ts = now_ms;
+    return;
+  }
+
+  if(!elapsed_ms(now_ms, temperature_conversion_started_ts, THERMOMETER_CONVERSION_WAIT_MS)) return;
+
+  temperature_conversion_in_progress = false;
+  temperature_last_cycle_ts = now_ms;
+
+  float reading = thermometer.getTempCByIndex(THERMOMETER_ONE_WIRE_IDX);
+  if(!is_valid_temperature(reading)) {
+    temperature_valid = false;
+    return;
+  }
+
+  temperature_valid = true;
+  temperature_celsius = reading;
+  temperature_celsius_abs_int = abs((int)round(reading));
+}
+
+void publish_periodic_temperature(uint32_t now_ms) {
+  if(!mqtt_connected) return;
+  if(!due_ms(now_ms, temperature_next_publish_ts)) return;
+
+  publish_temperature_state();
+  publish_state_json();
+  temperature_next_publish_ts = now_ms + MQTT_TEMPERATURE_PUBLISH_INTERVAL_MS;
+}
+
+//// DISPLAY
+
+bool is_time_synchronized(struct tm* out_timeinfo) {
+  time_t epoch = time(NULL);
+  if(epoch < NTP_VALID_EPOCH_THRESHOLD) return false;
+  localtime_r(&epoch, out_timeinfo);
+  return true;
+}
+
+void display_clock() {
+  struct tm timeinfo;
+  bool time_ok = is_time_synchronized(&timeinfo);
+
+  if(!time_ok) {
+    int status_signature = (wifi_connected ? 1 : 0) | (mqtt_connected ? 2 : 0);
+    if(last_clock_status_signature == status_signature) return;
+
+    set_all(LOW);
+    leds_state[0][0] = HIGH; // no valid time
+    leds_state[0][1] = wifi_connected ? HIGH : LOW;
+    leds_state[1][0] = mqtt_connected ? HIGH : LOW;
+    apply_leds();
+
+    last_clock_status_signature = status_signature;
+    last_displayed_seconds = -1;
+    return;
+  }
+
   if(last_displayed_seconds == timeinfo.tm_sec) return;
+
   last_displayed_seconds = timeinfo.tm_sec;
+  last_clock_status_signature = -1024;
 
   set_number(0, timeinfo.tm_hour);
   set_number(1, timeinfo.tm_min);
@@ -225,128 +478,235 @@ void display_clock() {
 }
 
 void display_temperature() {
-  update_temperature();
+  int value = temperature_valid ? temperature_celsius_abs_int : ERROR_DISPLAY_VALUE;
+  if(value < 0 || value > 99) value = ERROR_DISPLAY_VALUE;
 
-  // update screen only when needed
-  if (last_displayed_temperature == temperature_reading_celsius_abs_int) return;
+  bool negative = temperature_valid ? (temperature_celsius < 0.0f) : false;
+  int signature = negative ? -value : value;
 
-  if (temperature_reading_celsius_abs_int < -100 || temperature_reading_celsius_abs_int > 100) {
-    temperature_reading_celsius_abs_int = 77;
-  }
+  if(last_displayed_temperature_signature == signature) return;
+  last_displayed_temperature_signature = signature;
 
-  bool is_negative = temperature_reading_celsius < 0;
-  LEDS[0][1] = LEDS[1][1] = is_negative ? HIGH : LOW; // minus sign
-  set_number(1, temperature_reading_celsius_abs_int);
+  set_all(LOW);
+  leds_state[0][1] = leds_state[1][1] = negative ? HIGH : LOW;
+  set_number(1, value);
   apply_leds();
-
-  last_displayed_temperature = temperature_reading_celsius_abs_int;
 }
 
-void background_thread(void* pvParameters) {
-  for ever {
-    update_temperature();
-    delay(35 s);
-    String payload = String(temperature_reading_celsius, 2);
-    mqtt_client.publish(MQTT_TOPIC, 1, true, payload.c_str());
-    delay(35 s);
-  }
-}
+//// INPUT
 
-void mqtt_connect_loop() {
-  while(!mqtt_client.connected()) {
-    if(!WiFi.isConnected()) return;
-    mqtt_client.connect();
-    delay(10 s);
-  }
-}
-
-void e_wifi_connected(WiFiEvent_t event, WiFiEventInfo_t info) {
-  mqtt_connect_loop();
-}
-
-void e_wifi_disconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
-  //
-}
-
-void e_mqtt_disconnected(AsyncMqttClientDisconnectReason reason) {
-  mqtt_connect_loop();
-}
-
-void setup() {
-  // setup button
-  button.setDebounceTime(BUTTON_DEBOUNCE_MS);
-
-  // setup timezone
-  configTime(0, 0, NTP_SERVER);
-  setenv("TZ", TIMEZONE_ENV, 1);
-  tzset();
-
-  // setup Wi-Fi
-  WiFi.onEvent(e_wifi_connected   , ARDUINO_EVENT_WIFI_STA_GOT_IP      );
-  WiFi.onEvent(e_wifi_disconnected, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-  WiFi.setHostname(HOSTNAME);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  // signalize Wi-Fi setup complete
-  set_digit(1, 0b1);
-  apply_leds();
-
-  // setup MQTT
-  mqtt_client.onDisconnect(e_mqtt_disconnected);
-  mqtt_client.setServer(MQTT_HOST, MQTT_PORT);
-  mqtt_client.setCredentials(MQTT_USER, MQTT_PASSWORD);
-
-  // signalize MQTT setup complete
-  set_digit(1, 0b11);
-  apply_leds();
-  
-  // setup thermometer
-  thermometer.begin();
-  thermometer.setResolution(THERMOMETER_RESOLUTION);
-  update_temperature_force();
-
-  xTaskCreatePinnedToCore(
-    &background_thread,           // function
-    "background_thread",          // name
-    BACKGROUND_THREAD_STACK_SIZE, // stack size
-    NULL,                         // parameters
-    BACKGROUND_THREAD_PRIORITY,   // priority
-    &background_thread_handle,    // task handle
-    BACKGROUND_THREAD_CORE        // core
-  );
-}
-
-void loop() {
-  // handle button
+void handle_button(uint32_t now_ms) {
   button.loop();
 
   if(button.isPressed()) {
-    button_pressed_ts = millis();
+    button_pressed_ts = now_ms;
+    button_long_press_handled = false;
   }
 
   if(button.isReleased()) {
-    int pressed_for = millis() - button_pressed_ts;
-    if (pressed_for < LONG_PRESS_REPEAT_MS) {
+    if(!button_long_press_handled) {
       change_to_next_mode();
     }
     button_pressed_ts = 0;
   }
 
-  if(button_pressed_ts > 0) {
-    int pressed_for = millis() - button_pressed_ts;
-    if (pressed_for > LONG_PRESS_INITIAL_MS) {
+  if(button_pressed_ts == 0) return;
+
+  uint32_t pressed_for = now_ms - button_pressed_ts;
+  if(pressed_for >= (uint32_t)LONG_PRESS_INITIAL_MS) {
+    button_long_press_handled = true;
+    change_to_next_brightness_level();
+    button_pressed_ts += LONG_PRESS_REPEAT_MS;
+  }
+}
+
+//// MQTT CALLBACKS
+
+void on_mqtt_connected(bool session_present) {
+  (void)session_present;
+
+  mqtt_connected = true;
+  mqtt_client.publish(MQTT_TOPIC_STATE_ONLINE, 1, true, "1");
+
+  mqtt_client.subscribe(MQTT_TOPIC_CMD_MODE, 1);
+  mqtt_client.subscribe(MQTT_TOPIC_CMD_BRIGHTNESS, 1);
+  mqtt_client.subscribe(MQTT_TOPIC_CMD_STATE, 1);
+
+  // Subscribe only during restore window, then unsubscribe.
+  mqtt_client.subscribe(MQTT_TOPIC_STATE_MODE, 1);
+  mqtt_client.subscribe(MQTT_TOPIC_STATE_BRIGHTNESS, 1);
+
+  mqtt_restore_active = true;
+  mqtt_restore_started_ts = millis();
+}
+
+void on_mqtt_disconnected(AsyncMqttClientDisconnectReason reason) {
+  (void)reason;
+
+  mqtt_connected = false;
+  mqtt_restore_active = false;
+
+  if(wifi_connected) {
+    mqtt_connect_due_ts = millis() + MQTT_RETRY_INTERVAL_MS;
+  }
+}
+
+void process_mqtt_message(const char* topic, const char* payload, bool retained) {
+  if(strcmp(topic, MQTT_TOPIC_CMD_MODE) == 0) {
+    if(strcmp(payload, "next") == 0) {
+      change_to_next_mode();
+      return;
+    }
+    parse_and_set_mode(payload, true);
+    return;
+  }
+
+  if(strcmp(topic, MQTT_TOPIC_CMD_BRIGHTNESS) == 0) {
+    if(strcmp(payload, "next") == 0) {
       change_to_next_brightness_level();
-      button_pressed_ts += LONG_PRESS_REPEAT_MS;
+      return;
+    }
+    parse_and_set_brightness(payload, true);
+    return;
+  }
+
+  if(strcmp(topic, MQTT_TOPIC_CMD_STATE) == 0) {
+    publish_full_state();
+    return;
+  }
+
+  // State topics are accepted only during restore and only from retained data.
+  if(!mqtt_restore_active || !retained) return;
+
+  if(strcmp(topic, MQTT_TOPIC_STATE_MODE) == 0) {
+    parse_and_set_mode(payload, false);
+    return;
+  }
+
+  if(strcmp(topic, MQTT_TOPIC_STATE_BRIGHTNESS) == 0) {
+    parse_and_set_brightness(payload, false);
+    return;
+  }
+}
+
+void on_mqtt_message(
+  char* topic,
+  char* payload,
+  AsyncMqttClientMessageProperties properties,
+  size_t len,
+  size_t index,
+  size_t total
+) {
+  if(index == 0) {
+    strncpy(mqtt_rx_topic, topic, sizeof(mqtt_rx_topic) - 1);
+    mqtt_rx_topic[sizeof(mqtt_rx_topic) - 1] = '\0';
+    mqtt_rx_payload_len = 0;
+  }
+
+  size_t available = sizeof(mqtt_rx_payload) - 1 - mqtt_rx_payload_len;
+  size_t to_copy = (len < available) ? len : available;
+  memcpy(&mqtt_rx_payload[mqtt_rx_payload_len], payload, to_copy);
+  mqtt_rx_payload_len += to_copy;
+
+  if(index + len < total) return;
+
+  mqtt_rx_payload[mqtt_rx_payload_len] = '\0';
+  trim_and_lowercase(mqtt_rx_payload);
+
+  process_mqtt_message(mqtt_rx_topic, mqtt_rx_payload, properties.retain);
+}
+
+//// WIFI CALLBACKS
+
+void on_wifi_connected(WiFiEvent_t event, WiFiEventInfo_t info) {
+  (void)event;
+  (void)info;
+
+  wifi_connected = true;
+  mqtt_connect_due_ts = millis();
+}
+
+void on_wifi_disconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
+  (void)event;
+  (void)info;
+
+  wifi_connected = false;
+  mqtt_connected = false;
+  mqtt_restore_active = false;
+}
+
+//// MQTT RESTORE
+
+void finish_restore_window_if_needed(uint32_t now_ms) {
+  if(!mqtt_restore_active) return;
+  if(!elapsed_ms(now_ms, mqtt_restore_started_ts, MQTT_RESTORE_WINDOW_MS)) return;
+
+  mqtt_restore_active = false;
+  mqtt_client.unsubscribe(MQTT_TOPIC_STATE_MODE);
+  mqtt_client.unsubscribe(MQTT_TOPIC_STATE_BRIGHTNESS);
+
+  publish_full_state();
+}
+
+//// SETUP/LOOP
+
+void setup() {
+  for(int col = 0; col < LEDS_COLS; col++) {
+    for(int row = 0; row < LEDS_ROWS; row++) {
+      leds_channel_cache[col][row] = -1;
     }
   }
 
-  // display
+  set_all(LOW);
+  apply_leds();
+
+  button.setDebounceTime(BUTTON_DEBOUNCE_MS);
+
+  configTime(0, 0, NTP_SERVER);
+  setenv("TZ", TIMEZONE_ENV, 1);
+  tzset();
+
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.setHostname(HOSTNAME);
+  WiFi.onEvent(on_wifi_connected, ARDUINO_EVENT_WIFI_STA_GOT_IP);
+  WiFi.onEvent(on_wifi_disconnected, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  mqtt_client.onConnect(on_mqtt_connected);
+  mqtt_client.onDisconnect(on_mqtt_disconnected);
+  mqtt_client.onMessage(on_mqtt_message);
+  mqtt_client.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt_client.setCredentials(MQTT_USER, MQTT_PASSWORD);
+  mqtt_client.setWill(MQTT_TOPIC_STATE_ONLINE, 1, true, "0");
+
+  thermometer.begin();
+  thermometer.setResolution(THERMOMETER_RESOLUTION);
+  thermometer.setWaitForConversion(false);
+
+  uint32_t now_ms = millis();
+  temperature_last_cycle_ts = now_ms - THERMOMETER_READING_INTERVAL_MS;
+  temperature_next_publish_ts = now_ms + MQTT_TEMPERATURE_PUBLISH_INTERVAL_MS;
+}
+
+void loop() {
+  uint32_t now_ms = millis();
+
+  handle_button(now_ms);
+
+  ensure_mqtt_connected(now_ms);
+  finish_restore_window_if_needed(now_ms);
+
+  update_temperature_cycle(now_ms);
+  publish_periodic_temperature(now_ms);
+
   switch(mode) {
-    case M_CLOCK       : display_clock()       ;break;
-    case M_THERMOMETER : display_temperature() ;break;
-    case M_BLANK       :                       ;break;
+    case M_CLOCK:       display_clock();       break;
+    case M_THERMOMETER: display_temperature(); break;
+    case M_BLANK:       break; // LEDy są czyszczone w momencie zmiany trybu (set_mode)
   }
 
-  // chill
   delay(MAIN_LOOP_DELAY_MS);
 }
