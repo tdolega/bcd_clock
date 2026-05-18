@@ -5,60 +5,60 @@
 #include "../utils/helpers.hpp"
 
 /**
- * @brief Publishes the currently active mode string property to MQTT.
+ * @brief Publishes the currently active app.mode string property to MQTT.
  */
 inline void publish_mode_state() {
-  if(!mqtt_connected) return;
-  mqtt_client.publish(MQTT_TOPIC_STATE_MODE, 1, true, mode_to_string(mode));
+  if(!app.mqtt_connected) return;
+  app.mqtt_client.publish(MQTT_TOPIC_STATE_MODE, 1, true, mode_to_string(app.mode));
 }
 
 /**
- * @brief Publishes the brightness enumeration property to MQTT string representation.
+ * @brief Publishes the app.brightness enumeration property to MQTT string representation.
  */
 inline void publish_brightness_state() {
-  if(!mqtt_connected) return;
-  mqtt_client.publish(MQTT_TOPIC_STATE_BRIGHTNESS, 1, true, brightness_to_string(brightness));
+  if(!app.mqtt_connected) return;
+  app.mqtt_client.publish(MQTT_TOPIC_STATE_BRIGHTNESS, 1, true, brightness_to_string(app.brightness));
 }
 
 /**
  * @brief Dispatch sensor string representation reading for temperature value.
  */
 inline void publish_temperature_state() {
-  if(!mqtt_connected) return;
+  if(!app.mqtt_connected) return;
   char payload[32];
-  if(temperature_valid) {
-    snprintf(payload, sizeof(payload), "%.2f", temperature_celsius);
+  if(app.temperature_valid) {
+    snprintf(payload, sizeof(payload), "%.2f", app.temperature_celsius);
   } else {
     snprintf(payload, sizeof(payload), "nan");
   }
-  mqtt_client.publish(MQTT_TOPIC_STATE_TEMPERATURE, 1, true, payload);
+  app.mqtt_client.publish(MQTT_TOPIC_STATE_TEMPERATURE, 1, true, payload);
 }
 
 /**
  * @brief Composes collective status as JSON payload and broadcasts it over MQTT.
  */
 inline void publish_state_json() {
-  if(!mqtt_connected) return;
+  if(!app.mqtt_connected) return;
   char payload[160];
-  if(temperature_valid) {
+  if(app.temperature_valid) {
     snprintf(
       payload,
       sizeof(payload),
       "{\"mode\":\"%s\",\"brightness\":\"%s\",\"temperature_c\":%.2f}",
-      mode_to_string(mode),
-      brightness_to_string(brightness),
-      temperature_celsius
+      mode_to_string(app.mode),
+      brightness_to_string(app.brightness),
+      app.temperature_celsius
     );
   } else {
     snprintf(
       payload,
       sizeof(payload),
       "{\"mode\":\"%s\",\"brightness\":\"%s\",\"temperature_c\":null}",
-      mode_to_string(mode),
-      brightness_to_string(brightness)
+      mode_to_string(app.mode),
+      brightness_to_string(app.brightness)
     );
   }
-  mqtt_client.publish(MQTT_TOPIC_STATE_JSON, 1, true, payload);
+  app.mqtt_client.publish(MQTT_TOPIC_STATE_JSON, 1, true, payload);
 }
 
 /**
@@ -75,24 +75,24 @@ inline void publish_full_state() {
  * @brief Asserts and manages periodic routine validations for maintaining server connection.
  */
 inline void ensure_mqtt_connected(uint32_t now_ms) {
-  if(!wifi_connected) return;
-  if(mqtt_connected) return;
-  if(!due_ms(now_ms, mqtt_connect_due_ts)) return;
+  if(!app.wifi_connected) return;
+  if(app.mqtt_connected) return;
+  if(!due_ms(now_ms, app.mqtt_connect_due_ts)) return;
 
-  mqtt_client.connect();
-  mqtt_connect_due_ts = now_ms + MQTT_RETRY_INTERVAL_MS;
+  app.mqtt_client.connect();
+  app.mqtt_connect_due_ts = now_ms + MQTT_RETRY_INTERVAL_MS;
 }
 
 /**
  * @brief Closes historical retained messages evaluation bracket window.
  */
 inline void finish_restore_window_if_needed(uint32_t now_ms) {
-  if(!mqtt_restore_active) return;
-  if(!elapsed_ms(now_ms, mqtt_restore_started_ts, MQTT_RESTORE_WINDOW_MS)) return;
+  if(!app.mqtt_restore_active) return;
+  if(!elapsed_ms(now_ms, app.mqtt_restore_started_ts, MQTT_RESTORE_WINDOW_MS)) return;
 
-  mqtt_restore_active = false;
-  mqtt_client.unsubscribe(MQTT_TOPIC_STATE_MODE);
-  mqtt_client.unsubscribe(MQTT_TOPIC_STATE_BRIGHTNESS);
+  app.mqtt_restore_active = false;
+  app.mqtt_client.unsubscribe(MQTT_TOPIC_STATE_MODE);
+  app.mqtt_client.unsubscribe(MQTT_TOPIC_STATE_BRIGHTNESS);
 
   publish_full_state();
 }
@@ -103,18 +103,18 @@ inline void finish_restore_window_if_needed(uint32_t now_ms) {
 inline void on_mqtt_connected(bool session_present) {
   (void)session_present;
 
-  mqtt_connected = true;
-  mqtt_client.publish(MQTT_TOPIC_STATE_ONLINE, 1, true, "1");
+  app.mqtt_connected = true;
+  app.mqtt_client.publish(MQTT_TOPIC_STATE_ONLINE, 1, true, "1");
 
-  mqtt_client.subscribe(MQTT_TOPIC_CMD_MODE, 1);
-  mqtt_client.subscribe(MQTT_TOPIC_CMD_BRIGHTNESS, 1);
-  mqtt_client.subscribe(MQTT_TOPIC_CMD_STATE, 1);
+  app.mqtt_client.subscribe(MQTT_TOPIC_CMD_MODE, 1);
+  app.mqtt_client.subscribe(MQTT_TOPIC_CMD_BRIGHTNESS, 1);
+  app.mqtt_client.subscribe(MQTT_TOPIC_CMD_STATE, 1);
 
-  mqtt_client.subscribe(MQTT_TOPIC_STATE_MODE, 1);
-  mqtt_client.subscribe(MQTT_TOPIC_STATE_BRIGHTNESS, 1);
+  app.mqtt_client.subscribe(MQTT_TOPIC_STATE_MODE, 1);
+  app.mqtt_client.subscribe(MQTT_TOPIC_STATE_BRIGHTNESS, 1);
 
-  mqtt_restore_active = true;
-  mqtt_restore_started_ts = millis();
+  app.mqtt_restore_active = true;
+  app.mqtt_restore_started_ts = millis();
 }
 
 /**
@@ -122,65 +122,61 @@ inline void on_mqtt_connected(bool session_present) {
  */
 inline void on_mqtt_disconnected(AsyncMqttClientDisconnectReason reason) {
   (void)reason;
-  mqtt_connected = false;
-  mqtt_restore_active = false;
-  if(wifi_connected) {
-    mqtt_connect_due_ts = millis() + MQTT_RETRY_INTERVAL_MS;
+  app.mqtt_connected = false;
+  app.mqtt_restore_active = false;
+  if(app.wifi_connected) {
+    app.mqtt_connect_due_ts = millis() + MQTT_RETRY_INTERVAL_MS;
   }
 }
 
 /**
  * @brief Aggregator interface to intercept topic content.
  */
-inline void process_mqtt_message(const char* topic, const char* payload, bool retained) {
-  if(strcmp(topic, MQTT_TOPIC_CMD_MODE) == 0) {
-    if(strcmp(payload, "next") == 0) {
+inline void process_mqtt_message(const std::string& topic, const std::string& payload, bool retained) {
+  if(topic == MQTT_TOPIC_CMD_MODE) {
+    if(payload == "next") {
       change_to_next_mode();
       return;
     }
     parse_and_set_mode(payload, true);
     return;
   }
-  if(strcmp(topic, MQTT_TOPIC_CMD_BRIGHTNESS) == 0) {
-    if(strcmp(payload, "next") == 0) {
+  if(topic == MQTT_TOPIC_CMD_BRIGHTNESS) {
+    if(payload == "next") {
       change_to_next_brightness_level();
       return;
     }
     parse_and_set_brightness(payload, true);
     return;
   }
-  if(strcmp(topic, MQTT_TOPIC_CMD_STATE) == 0) {
+  if(topic == MQTT_TOPIC_CMD_STATE) {
     publish_full_state();
     return;
   }
-  if(!mqtt_restore_active || !retained) return;
+  if(!app.mqtt_restore_active || !retained) return;
 
-  if(strcmp(topic, MQTT_TOPIC_STATE_MODE) == 0) {
+  if(topic == MQTT_TOPIC_STATE_MODE) {
     parse_and_set_mode(payload, false);
     return;
   }
-  if(strcmp(topic, MQTT_TOPIC_STATE_BRIGHTNESS) == 0) {
+  if(topic == MQTT_TOPIC_STATE_BRIGHTNESS) {
     parse_and_set_brightness(payload, false);
     return;
   }
 }
 
 /**
- * @brief Callback wrapper to interpret streaming fragmented frames correctly from core hooks.
+ * @brief Callback wrapper to interpret streaming fragmented frames safely with std::string.
  */
 inline void on_mqtt_message(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
   if(index == 0) {
-    strncpy(mqtt_rx_topic, topic, sizeof(mqtt_rx_topic) - 1);
-    mqtt_rx_topic[sizeof(mqtt_rx_topic) - 1] = '\0';
-    mqtt_rx_payload_len = 0;
+    app.mqtt_rx_topic = topic;
+    app.mqtt_rx_payload.clear();
   }
-  size_t available = sizeof(mqtt_rx_payload) - 1 - mqtt_rx_payload_len;
-  size_t to_copy = (len < available) ? len : available;
-  memcpy(&mqtt_rx_payload[mqtt_rx_payload_len], payload, to_copy);
-  mqtt_rx_payload_len += to_copy;
+
+  app.mqtt_rx_payload.append(payload, len);
 
   if(index + len < total) return;
-  mqtt_rx_payload[mqtt_rx_payload_len] = '\0';
-  trim_and_lowercase(mqtt_rx_payload);
-  process_mqtt_message(mqtt_rx_topic, mqtt_rx_payload, properties.retain);
+  trim_and_lowercase(app.mqtt_rx_payload);
+  process_mqtt_message(app.mqtt_rx_topic, app.mqtt_rx_payload, properties.retain);
 }

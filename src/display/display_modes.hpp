@@ -21,24 +21,24 @@ inline void display_clock() {
   bool time_ok = is_time_synchronized(&timeinfo);
 
   if(!time_ok) {
-    int status_signature = (wifi_connected ? 1 : 0) | (mqtt_connected ? 2 : 0);
-    if(last_clock_status_signature == status_signature) return;
+    int status_signature = (app.wifi_connected ? 1 : 0) | (app.mqtt_connected ? 2 : 0);
+    if(app.last_clock_status_signature == status_signature) return;
 
     set_all(LOW);
-    leds_state[0][0] = HIGH; // no valid time
-    leds_state[0][1] = wifi_connected ? HIGH : LOW;
-    leds_state[1][0] = mqtt_connected ? HIGH : LOW;
+    app.leds_state[0][0] = HIGH; // no valid time
+    app.leds_state[0][1] = app.wifi_connected ? HIGH : LOW;
+    app.leds_state[1][0] = app.mqtt_connected ? HIGH : LOW;
     apply_leds();
 
-    last_clock_status_signature = status_signature;
-    last_displayed_seconds = -1;
+    app.last_clock_status_signature = status_signature;
+    app.last_displayed_seconds = -1;
     return;
   }
 
-  if(last_displayed_seconds == timeinfo.tm_sec) return;
+  if(app.last_displayed_seconds == timeinfo.tm_sec) return;
 
-  last_displayed_seconds = timeinfo.tm_sec;
-  last_clock_status_signature = -1024;
+  app.last_displayed_seconds = timeinfo.tm_sec;
+  app.last_clock_status_signature = -1024;
 
   set_number(0, timeinfo.tm_hour);
   set_number(1, timeinfo.tm_min);
@@ -50,17 +50,17 @@ inline void display_clock() {
  * @brief Binds fetched temperature and visualizes it onto board columns considering negative values.
  */
 inline void display_temperature() {
-  int value = temperature_valid ? temperature_celsius_abs_int : ERROR_DISPLAY_VALUE;
+  int value = app.temperature_valid ? app.temperature_celsius_abs_int : ERROR_DISPLAY_VALUE;
   if(value < 0 || value > 99) value = ERROR_DISPLAY_VALUE;
 
-  bool negative = temperature_valid ? (temperature_celsius < 0.0f) : false;
+  bool negative = app.temperature_valid ? (app.temperature_celsius < 0.0f) : false;
   int signature = negative ? -value : value;
 
-  if(last_displayed_temperature_signature == signature) return;
-  last_displayed_temperature_signature = signature;
+  if(app.last_displayed_temperature_signature == signature) return;
+  app.last_displayed_temperature_signature = signature;
 
   set_all(LOW);
-  leds_state[0][1] = leds_state[1][1] = negative ? HIGH : LOW;
+  app.leds_state[0][1] = app.leds_state[1][1] = negative ? HIGH : LOW;
   set_number(1, value);
   apply_leds();
 }
@@ -69,14 +69,14 @@ inline void display_temperature() {
  * @brief Extrapolates ICMP metrics representing them visually with a numeric rating logic.
  */
 inline void display_pingtest() {
-  int signature = ping_latency_ms;
-  if(last_displayed_ping_signature == signature) return;
-  last_displayed_ping_signature = signature;
+  int signature = app.ping_latency_ms;
+  if(app.last_displayed_ping_signature == signature) return;
+  app.last_displayed_ping_signature = signature;
 
   set_all(LOW);
 
-  if(ping_latency_ms >= 0) {
-    int value = ping_latency_ms;
+  if(app.ping_latency_ms >= 0) {
+    int value = app.ping_latency_ms;
     if(value > 9999) value = 9999;
 
     set_digit(2, (value / 1000) % 10);
@@ -94,7 +94,7 @@ inline void display_pingtest() {
     }
 
     for(int row = 0; row < quality_leds; row++) {
-      leds_state[1][row] = HIGH;
+      app.leds_state[1][row] = HIGH;
     }
   }
 

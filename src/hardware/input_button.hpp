@@ -4,29 +4,29 @@
 #include "../display/brightness.hpp"
 
 /**
- * @brief Interrogates GPIO pin matrix for manual push-button interaction from user bridging logic.
+ * @brief Interrogates GPIO pin matrix for manual push-app.button interaction from user bridging logic.
  */
 inline void handle_button(uint32_t now_ms) {
-  button.loop();
+  app.button.loop();
 
-  if(button.isPressed()) {
-    button_pressed_ts = now_ms;
-    button_long_press_handled = false;
+  if(app.button.isPressed()) {
+    app.button_pressed_ts = now_ms;
+    app.button_long_press_handled = false;
   }
 
-  if(button.isReleased()) {
-    if(!button_long_press_handled) {
+  if(app.button.isReleased()) {
+    if(!app.button_long_press_handled) {
       change_to_next_mode();
     }
-    button_pressed_ts = 0;
+    app.button_pressed_ts = 0;
   }
 
-  if(button_pressed_ts == 0) return;
+  if(app.button_pressed_ts == 0) return;
 
-  uint32_t pressed_for = now_ms - button_pressed_ts;
+  uint32_t pressed_for = now_ms - app.button_pressed_ts;
   if(pressed_for >= (uint32_t)LONG_PRESS_INITIAL_MS) {
-    button_long_press_handled = true;
+    app.button_long_press_handled = true;
     change_to_next_brightness_level();
-    button_pressed_ts += LONG_PRESS_REPEAT_MS;
+    app.button_pressed_ts += LONG_PRESS_REPEAT_MS;
   }
 }

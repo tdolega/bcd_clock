@@ -8,9 +8,6 @@ Firmware używa dwóch plików konfiguracyjnych:
 - [runtime_config.h](runtime_config.h) - bezpieczne domyślne wartości i mapowanie makr na stałe.
 - [runtime_config_local.h](runtime_config_local.h) - lokalne sekrety i nadpisania (ignorowany przez git).
 
-Plik szablonu:
-- [runtime_config.example.h](runtime_config.example.h)
-
 Najważniejsze parametry konfiguracyjne:
 - Wi-Fi (`CFG_WIFI_SSID`, `CFG_WIFI_PASSWORD`, `CFG_HOSTNAME`)
 - MQTT broker i dane logowania (`CFG_MQTT_HOST_*`, `CFG_MQTT_PORT`, `CFG_MQTT_USER`, `CFG_MQTT_PASSWORD`)
@@ -54,7 +51,7 @@ Poziomy jasności (`Brightness`):
 PWM:
 - częstotliwość `10 kHz`,
 - rozdzielczość `12 bit`,
-- kanały logiczne: `PWM_CHANNEL_LEDS_OFF = 0`, `PWM_CHANNEL_LEDS_ON = 1`.
+- kanał PWM: `PWM_CHANNEL_LEDS_ON = 1`.
 
 Aktualizacja LED jest zoptymalizowana: przełączane są tylko te GPIO, których kanał ON/OFF naprawdę się zmienił.
 

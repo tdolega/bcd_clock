@@ -1,12 +1,13 @@
 #pragma once
 #include "../config/globals.hpp"
+#include <string>
 
-// Forward declarations for MQTT
+// Forward declarations
 void publish_brightness_state();
 void publish_state_json();
 
 /**
- * @brief Translates brightness level enum to readable string.
+ * @brief Translates app.brightness level enum to readable string.
  */
 inline const char* brightness_to_string(Brightness current_brightness) {
   switch(current_brightness) {
@@ -19,10 +20,10 @@ inline const char* brightness_to_string(Brightness current_brightness) {
 }
 
 /**
- * @brief Modifies the LED brightness by issuing PWM channel command.
+ * @brief Modifies the LED app.brightness by issuing PWM channel command.
  */
 inline void set_brightness_safe(Brightness new_brightness, bool publish_state = true) {
-  if(brightness == new_brightness) {
+  if(app.brightness == new_brightness) {
     if(publish_state) {
       publish_brightness_state();
       publish_state_json();
@@ -30,8 +31,8 @@ inline void set_brightness_safe(Brightness new_brightness, bool publish_state = 
     return;
   }
 
-  brightness = new_brightness;
-  ledcWriteChannel(PWM_CHANNEL_LEDS_ON, brightness);
+  app.brightness = new_brightness;
+  ledcWriteChannel(PWM_CHANNEL_LEDS_ON, app.brightness);
 
   if(publish_state) {
     publish_brightness_state();
@@ -43,7 +44,7 @@ inline void set_brightness_safe(Brightness new_brightness, bool publish_state = 
  * @brief Cycle to the next dimming level loop.
  */
 inline void change_to_next_brightness_level() {
-  switch(brightness) {
+  switch(app.brightness) {
     case B_FULL:   set_brightness_safe(B_HIGH);   break;
     case B_HIGH:   set_brightness_safe(B_MEDIUM); break;
     case B_MEDIUM: set_brightness_safe(B_LOW);    break;
@@ -52,22 +53,22 @@ inline void change_to_next_brightness_level() {
 }
 
 /**
- * @brief Interprets text command and executes brightness adjustment.
+ * @brief Interprets text command and executes app.brightness adjustment.
  */
-inline bool parse_and_set_brightness(const char* token, bool publish_state = true) {
-  if(strcmp(token, "full") == 0 || strcmp(token, "4095") == 0) {
+inline bool parse_and_set_brightness(const std::string& token, bool publish_state = true) {
+  if(token == "full" || token == "4095") {
     set_brightness_safe(B_FULL, publish_state);
     return true;
   }
-  if(strcmp(token, "high") == 0 || strcmp(token, "128") == 0) {
+  if(token == "high" || token == "128") {
     set_brightness_safe(B_HIGH, publish_state);
     return true;
   }
-  if(strcmp(token, "medium") == 0 || strcmp(token, "8") == 0) {
+  if(token == "medium" || token == "8") {
     set_brightness_safe(B_MEDIUM, publish_state);
     return true;
   }
-  if(strcmp(token, "low") == 0 || strcmp(token, "2") == 0) {
+  if(token == "low" || token == "2") {
     set_brightness_safe(B_LOW, publish_state);
     return true;
   }

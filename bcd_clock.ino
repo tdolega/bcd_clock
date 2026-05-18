@@ -16,14 +16,14 @@
 void setup() {
   for(int col = 0; col < LEDS_COLS; col++) {
     for(int row = 0; row < LEDS_ROWS; row++) {
-      leds_channel_cache[col][row] = -1;
+      app.leds_channel_cache[col][row] = -2;
     }
   }
 
   set_all(LOW);
   apply_leds();
 
-  button.setDebounceTime(BUTTON_DEBOUNCE_MS);
+  app.button.setDebounceTime(BUTTON_DEBOUNCE_MS);
 
   configTime(0, 0, NTP_SERVER);
   setenv("TZ", TIMEZONE_ENV, 1);
@@ -38,21 +38,21 @@ void setup() {
 
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  mqtt_client.onConnect(on_mqtt_connected);
-  mqtt_client.onDisconnect(on_mqtt_disconnected);
-  mqtt_client.onMessage(on_mqtt_message);
-  mqtt_client.setServer(MQTT_HOST, MQTT_PORT);
-  mqtt_client.setCredentials(MQTT_USER, MQTT_PASSWORD);
-  mqtt_client.setWill(MQTT_TOPIC_STATE_ONLINE, 1, true, "0");
+  app.mqtt_client.onConnect(on_mqtt_connected);
+  app.mqtt_client.onDisconnect(on_mqtt_disconnected);
+  app.mqtt_client.onMessage(on_mqtt_message);
+  app.mqtt_client.setServer(MQTT_HOST, MQTT_PORT);
+  app.mqtt_client.setCredentials(MQTT_USER, MQTT_PASSWORD);
+  app.mqtt_client.setWill(MQTT_TOPIC_STATE_ONLINE, 1, true, "0");
 
-  thermometer.begin();
-  thermometer.setResolution(THERMOMETER_RESOLUTION);
-  thermometer.setWaitForConversion(false);
+  app.thermometer.begin();
+  app.thermometer.setResolution(THERMOMETER_RESOLUTION);
+  app.thermometer.setWaitForConversion(false);
 
   uint32_t now_ms = millis();
-  temperature_last_cycle_ts = now_ms - THERMOMETER_READING_INTERVAL_MS;
-  temperature_next_publish_ts = now_ms + MQTT_TEMPERATURE_PUBLISH_INTERVAL_MS;
-  ping_next_due_ts = now_ms;
+  app.temperature_last_cycle_ts = now_ms - THERMOMETER_READING_INTERVAL_MS;
+  app.temperature_next_publish_ts = now_ms + MQTT_TEMPERATURE_PUBLISH_INTERVAL_MS;
+  app.ping_next_due_ts = now_ms;
 }
 
 /**
@@ -70,11 +70,11 @@ void loop() {
   publish_periodic_temperature(now_ms);
   update_ping_cycle(now_ms);
 
-  switch(mode) {
+  switch(app.mode) {
     case M_CLOCK:       display_clock();       break;
     case M_THERMOMETER: display_temperature(); break;
     case M_PINGTEST:    display_pingtest();    break;
-    case M_BLANK:       break; 
+    case M_BLANK:       break;
   }
 
   delay(MAIN_LOOP_DELAY_MS);

@@ -2,7 +2,7 @@
 #include "../config/globals.hpp"
 #include "../hardware/led_control.hpp"
 
-// Forward declarations to break cyclic dependency with mqtt_client
+// Forward declarations
 void publish_mode_state();
 void publish_state_json();
 
@@ -10,14 +10,14 @@ void publish_state_json();
  * @brief Invalidates the caching constraints for drawing to force re-render.
  */
 inline void invalidate_display_cache() {
-  last_displayed_seconds = -1;
-  last_displayed_temperature_signature = -1024;
-  last_clock_status_signature = -1024;
-  last_displayed_ping_signature = -1024;
+  app.last_displayed_seconds = -1;
+  app.last_displayed_temperature_signature = -1024;
+  app.last_clock_status_signature = -1024;
+  app.last_displayed_ping_signature = -1024;
 }
 
 /**
- * @brief Converts the current mode into a string.
+ * @brief Converts the current app.mode into a string.
  */
 inline const char* mode_to_string(Modes current_mode) {
   switch(current_mode) {
@@ -30,10 +30,10 @@ inline const char* mode_to_string(Modes current_mode) {
 }
 
 /**
- * @brief Sets a new operation mode and updates LEDs immediately.
+ * @brief Sets a new operation app.mode and updates LEDs immediately.
  */
 inline void set_mode_safe(Modes new_mode, bool publish_state = true) {
-  if(mode == new_mode) {
+  if(app.mode == new_mode) {
     if(publish_state) {
       publish_mode_state();
       publish_state_json();
@@ -41,7 +41,7 @@ inline void set_mode_safe(Modes new_mode, bool publish_state = true) {
     return;
   }
 
-  mode = new_mode;
+  app.mode = new_mode;
   invalidate_display_cache();
 
   set_all(LOW);
@@ -54,10 +54,10 @@ inline void set_mode_safe(Modes new_mode, bool publish_state = true) {
 }
 
 /**
- * @brief Toggles cyclically onto the next mode.
+ * @brief Toggles cyclically onto the next app.mode.
  */
 inline void change_to_next_mode() {
-  switch(mode) {
+  switch(app.mode) {
     case M_CLOCK:       set_mode_safe(M_THERMOMETER); break;
     case M_THERMOMETER: set_mode_safe(M_PINGTEST);    break;
     case M_PINGTEST:    set_mode_safe(M_BLANK);       break;
@@ -66,22 +66,22 @@ inline void change_to_next_mode() {
 }
 
 /**
- * @brief Parses string token and applies match to mode property.
+ * @brief Parses string token and applies match to app.mode property.
  */
-inline bool parse_and_set_mode(const char* token, bool publish_state = true) {
-  if(strcmp(token, "clock") == 0 || strcmp(token, "m_clock") == 0) {
+inline bool parse_and_set_mode(const std::string& token, bool publish_state = true) {
+  if(token == "clock" || token == "m_clock") {
     set_mode_safe(M_CLOCK, publish_state);
     return true;
   }
-  if(strcmp(token, "thermometer") == 0 || strcmp(token, "m_thermometer") == 0 || strcmp(token, "temp") == 0) {
+  if(token == "thermometer" || token == "m_thermometer" || token == "temp") {
     set_mode_safe(M_THERMOMETER, publish_state);
     return true;
   }
-  if(strcmp(token, "pingtest") == 0 || strcmp(token, "m_pingtest") == 0 || strcmp(token, "ping") == 0) {
+  if(token == "pingtest" || token == "m_pingtest" || token == "ping") {
     set_mode_safe(M_PINGTEST, publish_state);
     return true;
   }
-  if(strcmp(token, "blank") == 0 || strcmp(token, "m_blank") == 0 || strcmp(token, "off") == 0) {
+  if(token == "blank" || token == "m_blank" || token == "off") {
     set_mode_safe(M_BLANK, publish_state);
     return true;
   }

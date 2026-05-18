@@ -7,7 +7,7 @@
 inline void set_all(int state) {
   for(int col = 0; col < LEDS_COLS; col++) {
     for(int row = 0; row < LEDS_ROWS; row++) {
-      leds_state[col][row] = state;
+      app.leds_state[col][row] = state;
     }
   }
 }
@@ -20,7 +20,7 @@ inline void set_digit(int col, int digit) {
   if(digit < 0 || digit > 9) return;
 
   for(int row = 0; row < LEDS_ROWS; row++) {
-    leds_state[col][row] = DIGIT_TO_BCD[digit][row];
+    app.leds_state[col][row] = DIGIT_TO_BCD[digit][row];
   }
 }
 
@@ -44,15 +44,22 @@ inline void apply_leds() {
       int gpio = GPIO_DIGITS[col][row];
       if(gpio == NO_PIN) continue;
 
-      int8_t desired_channel = leds_state[col][row] ? PWM_CHANNEL_LEDS_ON : PWM_CHANNEL_LEDS_OFF;
-      if(leds_channel_cache[col][row] == desired_channel) continue;
+      bool turn_on = app.leds_state[col][row];
+      int8_t desired_channel = turn_on ? PWM_CHANNEL_LEDS_ON : -1;
+
+      if(app.leds_channel_cache[col][row] == desired_channel) continue;
 
       ledcDetach(gpio);
-      ledcAttachChannel(gpio, PWM_FREQUENCY, PWM_RESOLUTION, desired_channel);
-      leds_channel_cache[col][row] = desired_channel;
+      if(turn_on) {
+        ledcAttachChannel(gpio, PWM_FREQUENCY, PWM_RESOLUTION, PWM_CHANNEL_LEDS_ON);
+      } else {
+        pinMode(gpio, OUTPUT);
+        digitalWrite(gpio, LOW);
+      }
+
+      app.leds_channel_cache[col][row] = desired_channel;
     }
   }
 
-  ledcWriteChannel(PWM_CHANNEL_LEDS_OFF, 0);
-  ledcWriteChannel(PWM_CHANNEL_LEDS_ON, brightness);
+  ledcWriteChannel(PWM_CHANNEL_LEDS_ON, app.brightness);
 }

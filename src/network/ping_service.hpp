@@ -6,12 +6,12 @@
  * @brief Halts an existing and active ICMP ping testing suite operation completely.
  */
 inline void stop_ping_session() {
-  if(!ping_session_active || ping_session_handle == NULL) return;
+  if(!app.ping_session_active || app.ping_session_handle == NULL) return;
 
-  esp_ping_stop(ping_session_handle);
-  esp_ping_delete_session(ping_session_handle);
-  ping_session_handle = NULL;
-  ping_session_active = false;
+  esp_ping_stop(app.ping_session_handle);
+  esp_ping_delete_session(app.ping_session_handle);
+  app.ping_session_handle = NULL;
+  app.ping_session_active = false;
 }
 
 inline void on_ping_success(esp_ping_handle_t hdl, void* args) {
@@ -19,18 +19,22 @@ inline void on_ping_success(esp_ping_handle_t hdl, void* args) {
   uint32_t size = sizeof(elapsed_ms);
   if(esp_ping_get_profile(hdl, ESP_PING_PROF_TIMEGAP, &elapsed_ms, size) != ESP_OK) return;
 
-  ping_reply_time_ms = elapsed_ms;
-  ping_reply_received = true;
+  app.ping_reply_time_ms = elapsed_ms;
+  app.ping_reply_received = true;
 }
 
 inline void on_ping_timeout(esp_ping_handle_t hdl, void* args) {
-  // Empty implementation as in original
+  app.ping_reply_received = false;
+  app.ping_session_finished = true; // Ensure cycle handles timeout as failure gracefully
 }
 
 inline void on_ping_end(esp_ping_handle_t hdl, void* args) {
-  ping_session_finished = true;
+  app.ping_session_finished = true;
 }
 
+/**
+ * @brief Triggers new ping using native ESP netif wrapper
+ */
 inline void start_ping_session() {
   esp_ping_config_t ping_config = ESP_PING_DEFAULT_CONFIG();
   ping_config.count = 1;
@@ -45,49 +49,49 @@ inline void start_ping_session() {
   ping_callbacks.on_ping_timeout = on_ping_timeout;
   ping_callbacks.on_ping_end = on_ping_end;
 
-  ping_reply_received = false;
-  ping_reply_time_ms = 0;
-  ping_session_finished = false;
+  app.ping_reply_received = false;
+  app.ping_reply_time_ms = 0;
+  app.ping_session_finished = false;
 
-  if(esp_ping_new_session(&ping_config, &ping_callbacks, &ping_session_handle) != ESP_OK) return;
-  if(esp_ping_start(ping_session_handle) != ESP_OK) {
-    esp_ping_delete_session(ping_session_handle);
-    ping_session_handle = NULL;
+  if(esp_ping_new_session(&ping_config, &ping_callbacks, &app.ping_session_handle) != ESP_OK) return;
+  if(esp_ping_start(app.ping_session_handle) != ESP_OK) {
+    esp_ping_delete_session(app.ping_session_handle);
+    app.ping_session_handle = NULL;
     return;
   }
 
-  ping_session_active = true;
+  app.ping_session_active = true;
 }
 
 /**
  * @brief Evaluates whether it's appropriate to trigger ICMP process right now, scheduling bounds.
  */
 inline void update_ping_cycle(uint32_t now_ms) {
-  if(mode != M_PINGTEST) {
+  if(app.mode != M_PINGTEST) {
     stop_ping_session();
     return;
   }
 
-  if(!wifi_connected) {
-    ping_latency_ms = PING_NO_RESULT;
+  if(!app.wifi_connected) {
+    app.ping_latency_ms = PING_NO_RESULT;
     stop_ping_session();
-    ping_next_due_ts = now_ms;
+    app.ping_next_due_ts = now_ms;
     return;
   }
 
-  if(ping_session_active && ping_session_finished) {
-    ping_latency_ms = ping_reply_received ? (int)ping_reply_time_ms : PING_NO_RESULT;
+  if(app.ping_session_active && app.ping_session_finished) {
+    app.ping_latency_ms = app.ping_reply_received ? (int)app.ping_reply_time_ms : PING_NO_RESULT;
     stop_ping_session();
-    ping_next_due_ts = now_ms + PING_INTERVAL_MS;
+    app.ping_next_due_ts = now_ms + PING_INTERVAL_MS;
     return;
   }
 
-  if(ping_session_active) return;
-  if(!due_ms(now_ms, ping_next_due_ts)) return;
+  if(app.ping_session_active) return;
+  if(!due_ms(now_ms, app.ping_next_due_ts)) return;
 
   start_ping_session();
-  if(!ping_session_active) {
-    ping_latency_ms = PING_NO_RESULT;
-    ping_next_due_ts = now_ms + PING_INTERVAL_MS;
+  if(!app.ping_session_active) {
+    app.ping_latency_ms = PING_NO_RESULT;
+    app.ping_next_due_ts = now_ms + PING_INTERVAL_MS;
   }
 }
