@@ -1,32 +1,47 @@
 #pragma once
+
+#include <Arduino.h>
+#include <Matter.h>
 #include "../config/globals.hpp"
-#include "../display/modes.hpp"
-#include "../display/brightness.hpp"
 
-/**
- * @brief Interrogates GPIO pin matrix for manual push-app.button interaction from user bridging logic.
- */
-inline void handle_button(uint32_t now_ms) {
-  app.button.loop();
+extern ezButton button;
 
-  if(app.button.isPressed()) {
-    app.button_pressed_ts = now_ms;
-    app.button_long_press_handled = false;
+inline void setup_button() {
+  button.setDebounceTime(BUTTON_DEBOUNCE_MS);
+}
+
+inline void handle_button() {
+  button.loop();
+
+  uint32_t now = millis();
+
+  // Reset click count after 3 seconds of inactivity
+  if (app.button_click_count > 0 && (now - app.button_last_click_ts > 3000)) {
+    Serial.printf("Button click timeout, resetting count from %d to 0\n", app.button_click_count);
+    app.button_click_count = 0;
   }
 
-  if(app.button.isReleased()) {
-    if(!app.button_long_press_handled) {
-      change_to_next_mode();
+  if (button.isPressed()) {
+    app.button_click_count++;
+    app.button_last_click_ts = now;
+    Serial.printf("Button pressed. Count: %d/16\n", app.button_click_count);
+
+    if (app.button_click_count >= 16) {
+      Serial.println("16 consecutive clicks detected. Initiating Matter Factory Reset (decommission)!");
+      for (int i = 0; i < 5; i++) {
+        set_all(HIGH);
+        apply_leds();
+        delay(100);
+        set_all(LOW);
+        apply_leds();
+        delay(100);
+      }
+      
+      // Delay to let user release button
+      delay(1000);
+      Matter.decommission();
+      delay(500);
+      ESP.restart();
     }
-    app.button_pressed_ts = 0;
-  }
-
-  if(app.button_pressed_ts == 0) return;
-
-  uint32_t pressed_for = now_ms - app.button_pressed_ts;
-  if(pressed_for >= (uint32_t)LONG_PRESS_INITIAL_MS) {
-    app.button_long_press_handled = true;
-    change_to_next_brightness_level();
-    app.button_pressed_ts += LONG_PRESS_REPEAT_MS;
   }
 }

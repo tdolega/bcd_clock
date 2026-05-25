@@ -15,7 +15,7 @@ echo "Confirmed port: $PORT"
 echo "Starting compilation and flashing using arduino-cli..."
 
 nix-shell -p arduino-cli --run \
-  "arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=huge_app --libraries /home/tsd/1/code/arduino/libraries -u -p $PORT bcd_clock.ino"
+  "arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=rainmaker --libraries /home/tsd/1/code/arduino/libraries -u -p $PORT bcd_clock.ino"
 
 if [ $? -eq 0 ]; then
     echo ""

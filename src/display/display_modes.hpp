@@ -1,102 +1,94 @@
 #pragma once
+
+#include <Arduino.h>
 #include "../config/globals.hpp"
 #include "../hardware/led_control.hpp"
-#include <time.h>
 
-/**
- * @brief Checks if time has been synced and populates out struct.
- */
-inline bool is_time_synchronized(struct tm* out_timeinfo) {
-  time_t epoch = time(NULL);
-  if(epoch < NTP_VALID_EPOCH_THRESHOLD) return false;
-  localtime_r(&epoch, out_timeinfo);
-  return true;
+inline void invalidate_display_cache() {
+  app.last_displayed_seconds = -1;
+  app.last_clock_status_signature = -1024;
+  for(int col=0; col<6; col++) {
+    for(int row=0; row<4; row++) {
+      app.leds_channel_cache[col][row] = -128;
+    }
+  }
 }
 
-/**
- * @brief Retrieves synchronization time safely and parses it to BCD formatted visualization.
- */
-inline void display_clock() {
+inline bool is_time_synchronized() {
+  time_t now;
+  time(&now);
   struct tm timeinfo;
-  bool time_ok = is_time_synchronized(&timeinfo);
+  localtime_r(&now, &timeinfo);
+  return timeinfo.tm_year > (2020 - 1900);
+}
 
-  if(!time_ok) {
-    int status_signature = (app.wifi_connected ? 1 : 0) | (app.mqtt_connected ? 2 : 0);
-    if(app.last_clock_status_signature == status_signature) return;
+inline void display_commissioning() {
+  reset_leds();
+  uint32_t now = millis();
+  
+  // A snake-like dot looping around the border
+  int step = (now / 150) % 16;
+  
+  int col = 0, row = 0;
+  
+  if (step < 6) { col = step; row = 0; }
+  else if (step < 9) { col = 5; row = step - 5; }
+  else if (step < 14) { col = 14 - step; row = 3; }
+  else { col = 0; row = 17 - step; }
+  
+  if (GPIO_DIGITS[col][row] != NO_PIN) {
+    app.leds_state[col][row] = HIGH;
+  }
+  
+  // Every time animation cycle resets, print one debug ping to not clutter
+  static uint32_t last_anim_cycle = 0;
+  if (step == 0 && (now - last_anim_cycle > 1000)) {
+    Serial.println("Waiting for Matter Commissioning...");
+    last_anim_cycle = now;
+  }
+}
 
-    set_all(LOW);
-    app.leds_state[0][0] = HIGH; // no valid time
-    app.leds_state[0][1] = app.wifi_connected ? HIGH : LOW;
-    app.leds_state[1][0] = app.mqtt_connected ? HIGH : LOW;
-    apply_leds();
+inline void display_ntp_sync() {
+  reset_leds();
+  uint32_t now = millis();
 
-    app.last_clock_status_signature = status_signature;
-    app.last_displayed_seconds = -1;
+  // Blinking horizontal line in the middle
+  bool on = (now / 500) % 2 == 0;
+  if (on) {
+    for(int i = 0; i < 6; ++i) {
+      if (GPIO_DIGITS[i][1] != NO_PIN) {
+        app.leds_state[i][1] = HIGH;
+      }
+    }
+  }
+  
+  static uint32_t last_ntp_print = 0;
+  if (now - last_ntp_print > 1000) {
+    Serial.println("Waiting for NTP Sync...");
+    last_ntp_print = now;
+  }
+}
+
+inline void display_clock() {
+  time_t now;
+  time(&now);
+  struct tm timeinfo;
+  localtime_r(&now, &timeinfo);
+
+  if (timeinfo.tm_sec == app.last_displayed_seconds) {
     return;
   }
-
-  if(app.last_displayed_seconds == timeinfo.tm_sec) return;
-
+  
   app.last_displayed_seconds = timeinfo.tm_sec;
-  app.last_clock_status_signature = -1024;
 
-  set_number(0, timeinfo.tm_hour);
-  set_number(1, timeinfo.tm_min);
-  set_number(2, timeinfo.tm_sec);
-  apply_leds();
-}
-
-/**
- * @brief Binds fetched temperature and visualizes it onto board columns considering negative values.
- */
-inline void display_temperature() {
-  int value = app.temperature_valid ? app.temperature_celsius_abs_int : ERROR_DISPLAY_VALUE;
-  if(value < 0 || value > 99) value = ERROR_DISPLAY_VALUE;
-
-  bool negative = app.temperature_valid ? (app.temperature_celsius < 0.0f) : false;
-  int signature = negative ? -value : value;
-
-  if(app.last_displayed_temperature_signature == signature) return;
-  app.last_displayed_temperature_signature = signature;
-
-  set_all(LOW);
-  app.leds_state[0][1] = app.leds_state[1][1] = negative ? HIGH : LOW;
-  set_number(1, value);
-  apply_leds();
-}
-
-/**
- * @brief Extrapolates ICMP metrics representing them visually with a numeric rating logic.
- */
-inline void display_pingtest() {
-  int signature = app.ping_latency_ms;
-  if(app.last_displayed_ping_signature == signature) return;
-  app.last_displayed_ping_signature = signature;
-
-  set_all(LOW);
-
-  if(app.ping_latency_ms >= 0) {
-    int value = app.ping_latency_ms;
-    if(value > 9999) value = 9999;
-
-    set_digit(2, (value / 1000) % 10);
-    set_digit(3, (value / 100) % 10);
-    set_digit(4, (value / 10) % 10);
-    set_digit(5, value % 10);
-
-    int quality_leds = 1;
-    if(value >= 100) {
-      quality_leds = 4;
-    } else if(value >= 50) {
-      quality_leds = 3;
-    } else if(value >= 25) {
-      quality_leds = 2;
-    }
-
-    for(int row = 0; row < quality_leds; row++) {
-      app.leds_state[1][row] = HIGH;
-    }
+  reset_leds();
+  set_number(0, 1, timeinfo.tm_hour);
+  set_number(2, 3, timeinfo.tm_min);
+  set_number(4, 5, timeinfo.tm_sec);
+  
+  static bool clock_started = false;
+  if (!clock_started) {
+    Serial.println("Clock synchronized and running! Serial debug will now be quiet.");
+    clock_started = true;
   }
-
-  apply_leds();
 }
