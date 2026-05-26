@@ -2,13 +2,19 @@
 
 #include <Arduino.h>
 #include <ezButton.h>
+#include <DallasTemperature.h>
+#include <OneWire.h>
 
 #define kHz * 1000
 
 inline const uint32_t PWM_FREQUENCY = 10 kHz;
 inline const uint8_t PWM_RESOLUTION = 12; // 1-20 [bits]
+inline const int THERMOMETER_RESOLUTION = 12; // 9-12 [bits]
+inline const int ERROR_DISPLAY_VALUE = 77;
 inline const int MAIN_LOOP_DELAY_MS = 2;
 inline const int BUTTON_DEBOUNCE_MS = 50;
+inline const int LONG_PRESS_INITIAL_MS = 800;
+inline const int LONG_PRESS_REPEAT_MS = 400;
 
 inline const int LEDS_COLS = 6;
 inline const int LEDS_ROWS = 4;
@@ -37,12 +43,15 @@ inline const int DIGIT_TO_BCD[10][4] = {
 };
 
 inline const int GPIO_PIN_BUTTON = 35;
+inline const int GPIO_PIN_THERMOMETER = 32;
 inline const int8_t PWM_CHANNEL_LEDS_ON = 1;
+inline const int THERMOMETER_ONE_WIRE_IDX = 0;
+inline const uint32_t THERMOMETER_READING_INTERVAL_MS = 5000;
+inline const uint32_t THERMOMETER_CONVERSION_WAIT_MS = 800;
 
 typedef enum Modes {
-  M_COMMISSIONING,
-  M_NTP_SYNC,
-  M_CLOCK
+  M_CLOCK,
+  M_THERMOMETER
 } Modes;
 
 struct AppState {
@@ -50,15 +59,26 @@ struct AppState {
   int8_t leds_channel_cache[6][4];
 
   uint16_t brightness = 512; // 0-4095
-  Modes mode = M_COMMISSIONING;
+  Modes mode = M_CLOCK;
 
   int last_displayed_seconds = -1;
   int last_clock_status_signature = -1024;
+  int last_displayed_temperature_signature = -1024;
   
   uint32_t commissioning_animation_state = 0;
   uint32_t ntp_sync_animation_state = 0;
   int button_click_count = 0;
   uint32_t button_last_click_ts = 0;
+
+  float temperature_celsius = 0.0f;
+  int temperature_celsius_abs_int = ERROR_DISPLAY_VALUE;
+  bool temperature_valid = false;
+  bool temperature_conversion_in_progress = false;
+  uint32_t temperature_conversion_started_ts = 0;
+  uint32_t temperature_last_cycle_ts = 0;
+
+  OneWire one_wire_thermometer{GPIO_PIN_THERMOMETER};
+  DallasTemperature thermometer{&one_wire_thermometer};
 };
 
 extern AppState app;
