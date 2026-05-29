@@ -19,7 +19,6 @@ inline void configure_time_sync() {
   setenv("TZ", TZ_ENV, 1);
   tzset();
   sntp_set_sync_interval(NTP_SYNC_INTERVAL_MS);
-  // IMMED zamiast SMOOTH - odświeżamy wyświetlacz natychmiastowo po złapaniu pakietu
   sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);
 }
 

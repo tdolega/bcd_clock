@@ -16,7 +16,7 @@ inline void save_brightness(uint16_t brightness) {
 
 inline uint16_t load_brightness() {
   brightness_prefs.begin("bcd_clock", true);
-  uint16_t brightness = brightness_prefs.getUShort("brightness", 128);
+  uint16_t brightness = brightness_prefs.getUShort("brightness", 16);
   brightness_prefs.end();
   return brightness;
 }

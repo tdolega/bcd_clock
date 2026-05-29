@@ -27,7 +27,5 @@ inline void ensure_wifi_connected(uint32_t now_ms) {
     return;
   }
 
-  // Wbudowany automechanizm odzyskiwania WiFi (WIFI_STA + AutoReconnect) działa w tle,
-  // więc nie przerywamy go wywołaniem ręcznego WiFi.reconnect().
   app.wifi_connected = false;
 }

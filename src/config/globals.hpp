@@ -74,8 +74,8 @@ struct AppState {
   int leds_state[6][4];
   int8_t leds_channel_cache[6][4];
 
-  volatile uint16_t brightness = 8; // 0-4095
-  uint16_t current_hw_brightness = 0xFFFF; // Gwarantuje pierwszą inicjalizację PWM
+  volatile uint16_t brightness = 16; // 0-4095
+  uint16_t current_hw_brightness = 0xFFFF;
   Modes mode = M_CLOCK;
 
   uint32_t button_pressed_ts = 0;

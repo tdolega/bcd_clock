@@ -17,7 +17,7 @@ MatterDimmableLight matterLight;
 MatterTemperatureSensor matterTemperatureSensor;
 
 void setup() {
-  Serial.end(); 
+  Serial.end();
 
   for(int col = 0; col < LEDS_COLS; col++) {
     for(int row = 0; row < LEDS_ROWS; row++) {
