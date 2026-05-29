@@ -4,6 +4,7 @@
 #include <Matter.h>
 #include "../config/globals.hpp"
 #include "../app/matter_sync.hpp"
+#include "../utils/brightness_persistence.hpp"
 
 extern ezButton button;
 
@@ -66,6 +67,7 @@ inline void handle_button() {
     app.button_long_press_handled = true;
     app.button_click_count = 0;
     app.brightness = next_brightness_level(app.brightness);
+    save_brightness(app.brightness);
     update_matter_brightness(app.brightness, now_ms);
     app.button_pressed_ts += LONG_PRESS_REPEAT_MS;
   }

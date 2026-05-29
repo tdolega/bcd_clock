@@ -7,6 +7,7 @@
 #include "src/app/wifi_control.hpp"
 #include "src/app/time_sync.hpp"
 #include "src/app/diagnostics.hpp"
+#include "src/utils/brightness_persistence.hpp"
 
 #include <Matter.h>
 
@@ -36,6 +37,9 @@ void setup() {
   matterTemperatureSensor.begin(-25.0);
   setup_wifi_initial();
   configure_time_sync();
+  
+  app.brightness = load_brightness();
+  
   matterLight.begin();
   
   matterLight.onChange([](bool state, uint8_t brightness) -> bool {
@@ -45,6 +49,7 @@ void setup() {
       app.brightness = brightness_to_pwm(brightness);
     }
     app.matter_last_brightness_reported = brightness;
+    save_brightness(app.brightness);
     return true;
   });
   
