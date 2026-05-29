@@ -33,6 +33,8 @@ inline const int DIAG_CODE_TEMP = 3;
 inline const int LEDS_COLS = 6;
 inline const int LEDS_ROWS = 4;
 inline const int NO_PIN = -1;
+inline const int8_t LED_CACHE_INVALID = -128;
+inline const int8_t LED_CHANNEL_OFF = -1;
 
 inline const int GPIO_DIGITS[6][4] = {
   {21, 17, NO_PIN, NO_PIN},
@@ -72,11 +74,9 @@ struct AppState {
   int leds_state[6][4];
   int8_t leds_channel_cache[6][4];
 
-  uint16_t brightness = 8; // 0-4095
+  volatile uint16_t brightness = 8; // 0-4095
+  uint16_t current_hw_brightness = 0xFFFF; // Gwarantuje pierwszą inicjalizację PWM
   Modes mode = M_CLOCK;
-
-  int last_displayed_seconds = -1;
-  int last_displayed_temperature_signature = -1024;
 
   uint32_t button_pressed_ts = 0;
   bool button_long_press_handled = false;
@@ -85,8 +85,10 @@ struct AppState {
 
   bool wifi_connected = false;
   uint32_t wifi_last_attempt_ts = 0;
-  uint32_t ntp_last_sync_ts = 0;
-  uint8_t matter_last_brightness_reported = 0;
+  
+  volatile uint32_t ntp_last_sync_ts = 0;
+  volatile uint8_t matter_last_brightness_reported = 0;
+  
   uint32_t matter_last_brightness_report_ts = 0;
   float matter_last_temperature_reported = -1000.0f;
   uint32_t matter_last_temperature_report_ts = 0;

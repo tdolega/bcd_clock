@@ -32,6 +32,7 @@ inline uint8_t pwm_to_matter_brightness(uint16_t pwm) {
 inline void update_matter_brightness(uint16_t pwm, uint32_t now_ms) {
   uint8_t level = pwm_to_matter_brightness(pwm);
   bool state = pwm > 0;
+  
   if (app.matter_last_brightness_reported == level && matterLight.getOnOff() == state) {
     return;
   }
@@ -55,6 +56,7 @@ inline void update_matter_temperature(float temperature, bool valid, uint32_t no
   float delta = fabsf(temperature - app.matter_last_temperature_reported);
   bool min_elapsed = elapsed_ms(now_ms, app.matter_last_temperature_report_ts, MATTER_TEMP_REPORT_MIN_MS);
   bool max_elapsed = elapsed_ms(now_ms, app.matter_last_temperature_report_ts, MATTER_TEMP_REPORT_MAX_MS);
+  
   if (!min_elapsed && !max_elapsed) {
     return;
   }

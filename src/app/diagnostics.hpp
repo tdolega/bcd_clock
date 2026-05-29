@@ -42,5 +42,4 @@ inline void display_diagnostics(uint32_t now_ms) {
     app.leds_state[0][2] = HIGH;
     app.leds_state[1][2] = HIGH;
   }
-  apply_leds();
 }

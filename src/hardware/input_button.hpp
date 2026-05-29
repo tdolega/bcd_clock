@@ -28,6 +28,7 @@ inline uint16_t next_brightness_level(uint16_t current) {
 inline void setup_button() {
   button.setDebounceTime(BUTTON_DEBOUNCE_MS);
 }
+
 inline void handle_button() {
   button.loop();
 
@@ -45,8 +46,6 @@ inline void handle_button() {
   if (button.isReleased()) {
     if (!app.button_long_press_handled) {
       app.mode = (app.mode == M_CLOCK) ? M_THERMOMETER : M_CLOCK;
-      app.last_displayed_seconds = -1;
-      app.last_displayed_temperature_signature = -1024;
 
       app.button_click_count++;
       app.button_last_click_ts = now_ms;
@@ -67,7 +66,6 @@ inline void handle_button() {
     app.button_long_press_handled = true;
     app.button_click_count = 0;
     app.brightness = next_brightness_level(app.brightness);
-    ledcWriteChannel(PWM_CHANNEL_LEDS_ON, app.brightness);
     update_matter_brightness(app.brightness, now_ms);
     app.button_pressed_ts += LONG_PRESS_REPEAT_MS;
   }

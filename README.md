@@ -50,6 +50,8 @@ Wiersze: bity BCD `1 2 4 8`
 | col4 (S10) | GPIO23 | GPIO12 | GPIO3  | NO |
 | col5 (S1)  | GPIO5  | GPIO1  | GPIO25 | GPIO33 |
 
+**Ważne:** Z powodu użycia sprzętowych pinów UART (GPIO1, GPIO3) do sterowania matrycą, logowanie Serial w kodzie jest celowo całkowicie wyłączone (z poziomu skryptu sh oraz poprzez `Serial.end()`), aby zapobiec niekontrolowanemu migotaniu diod wynikającemu z dużej ilości logów generowanych przez rdzeń Matter.
+
 `NO` oznacza brak diody na danej pozycji siatki.
 
 ## Biblioteki
@@ -59,3 +61,8 @@ Wiersze: bity BCD `1 2 4 8`
 - `WiFi.h`
 - `Matter`
 - `time.h`
+- `esp_sntp.h`
+
+---
+
+## bcd_clock.ino

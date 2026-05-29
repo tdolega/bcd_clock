@@ -20,7 +20,9 @@ inline void setup_temperature_sensor() {
 
 inline void start_temperature_conversion(uint32_t now_ms) {
   if (app.temperature_conversion_in_progress) return;
-  if (!elapsed_ms(now_ms, app.temperature_last_cycle_ts, THERMOMETER_READING_INTERVAL_MS)) return;
+  
+  // Wymuszenie pomiaru tylko na starcie (0). Zapobiega atakowi DOS na szynę, jeśli czujnik padnie później.
+  if (app.temperature_last_cycle_ts != 0 && !elapsed_ms(now_ms, app.temperature_last_cycle_ts, THERMOMETER_READING_INTERVAL_MS)) return;
 
   app.thermometer.requestTemperatures();
   app.temperature_conversion_in_progress = true;

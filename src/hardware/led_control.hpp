@@ -40,7 +40,7 @@ inline void apply_leds() {
       if (gpio == NO_PIN) continue;
 
       bool turn_on = app.leds_state[col][row];
-      int8_t desired_channel = turn_on ? PWM_CHANNEL_LEDS_ON : -1;
+      int8_t desired_channel = turn_on ? PWM_CHANNEL_LEDS_ON : LED_CHANNEL_OFF;
 
       if (app.leds_channel_cache[col][row] != desired_channel) {
         if (turn_on) {
@@ -55,5 +55,8 @@ inline void apply_leds() {
     }
   }
 
-  ledcWriteChannel(PWM_CHANNEL_LEDS_ON, app.brightness);
+  if (app.brightness != app.current_hw_brightness) {
+    ledcWriteChannel(PWM_CHANNEL_LEDS_ON, app.brightness);
+    app.current_hw_brightness = app.brightness;
+  }
 }
