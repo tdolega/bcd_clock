@@ -62,7 +62,3 @@ Wiersze: bity BCD `1 2 4 8`
 - `Matter`
 - `time.h`
 - `esp_sntp.h`
-
----
-
-## bcd_clock.ino
