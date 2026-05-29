@@ -4,16 +4,16 @@
 #include "../config/globals.hpp"
 
 inline void reset_leds() {
-  for(int col=0; col<6; col++) {
-    for(int row=0; row<4; row++) {
+  for(int col = 0; col < LEDS_COLS; col++) {
+    for(int row = 0; row < LEDS_ROWS; row++) {
       app.leds_state[col][row] = LOW;
     }
   }
 }
 
 inline void set_all(int state) {
-  for(int col=0; col<6; col++) {
-    for(int row=0; row<4; row++) {
+  for(int col = 0; col < LEDS_COLS; col++) {
+    for(int row = 0; row < LEDS_ROWS; row++) {
       app.leds_state[col][row] = state;
     }
   }
@@ -21,7 +21,7 @@ inline void set_all(int state) {
 
 inline void set_digit(int col, int number) {
   if (number < 0 || number > 9) return;
-  for(int row=0; row<4; row++) {
+  for(int row = 0; row < LEDS_ROWS; row++) {
     app.leds_state[col][row] = DIGIT_TO_BCD[number][row];
   }
 }
@@ -34,8 +34,8 @@ inline void set_number(int colHigh, int colLow, int number) {
 }
 
 inline void apply_leds() {
-  for(int col=0; col<6; col++) {
-    for(int row=0; row<4; row++) {
+  for(int col = 0; col < LEDS_COLS; col++) {
+    for(int row = 0; row < LEDS_ROWS; row++) {
       int gpio = GPIO_DIGITS[col][row];
       if (gpio == NO_PIN) continue;
 
@@ -43,7 +43,7 @@ inline void apply_leds() {
       int8_t desired_channel = turn_on ? PWM_CHANNEL_LEDS_ON : -1;
 
       if (app.leds_channel_cache[col][row] != desired_channel) {
-        if(turn_on) {
+        if (turn_on) {
           ledcAttachChannel(gpio, PWM_FREQUENCY, PWM_RESOLUTION, PWM_CHANNEL_LEDS_ON);
         } else {
           ledcDetach(gpio);

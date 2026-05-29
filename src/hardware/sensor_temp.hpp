@@ -3,12 +3,8 @@
 #include <Arduino.h>
 #include <DallasTemperature.h>
 #include <OneWire.h>
-#include <Matter.h>
-
 #include "../config/globals.hpp"
 #include "../utils/helpers.hpp"
-
-extern MatterTemperatureSensor matterTemperatureSensor;
 
 inline bool is_valid_temperature(float value) {
   if (value == DEVICE_DISCONNECTED_C) return false;
@@ -47,5 +43,5 @@ inline void finish_temperature_conversion(uint32_t now_ms) {
   app.temperature_valid = true;
   app.temperature_celsius = reading;
   app.temperature_celsius_abs_int = abs((int)roundf(reading));
-  matterTemperatureSensor.setTemperature(reading);
+  app.temperature_last_read_ts = now_ms;
 }
