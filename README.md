@@ -1,64 +1,98 @@
 # BCD Clock (ESP32 + Matter)
 
-## Opis
-Zegar BCD oparty o ESP32 z dwoma trybami: zegar oraz termometr (DS18B20). Urządzenie wystawia w Matter dwa endpointy:
+A smart, asynchronous BCD (Binary-Coded Decimal) clock with a built-in thermometer, based on the ESP32 microcontroller. The device fully integrates with the Smart Home ecosystem via the native Matter protocol (no cloud bridges required), exposing lighting and temperature sensor interfaces.
 
-- **Dimmable Light** – regulacja jasności wyświetlacza,
-- **Temperature Sensor** – raport temperatury.
+## Core Features
 
-## Pairing code
-Stały kod parowania: **34970112332**.
+* **Native Matter Support:** Works locally (over IPv6) with Apple Home, Google Home, and Home Assistant.
+* **Hardware BCD Control:** Direct LED matrix drive (20 LEDs) utilizing microcontroller PWM channel optimization.
+* **Advanced Auto-diagnostics (Fail-safe):** Hardware visualization of connection errors (Wi-Fi, NTP, OneWire) directly on the LED matrix.
+* **Network Resilience:** Automatic Wi-Fi reconnect and internal RTC synchronized via NTP (CET/CEST timezone).
+* **Asynchronous Sensor Reading:** Non-blocking handling of the DS18B20 thermometer, with a synchronous initialization mode ensuring a valid state in the Matter network immediately after boot.
 
-## Tryby pracy
-- `M_CLOCK` – zegar (`HH:MM:SS`),
-- `M_THERMOMETER` – temperatura w stopniach Celsjusza.
+---
 
-## Sterowanie przyciskiem (GPIO35)
-- **Krótki klik** – przełącza zegar/termometr.
-- **Długie przytrzymanie** – zmienia jasność cyklicznie: `2 → 8 → 128 → 4095`.
-- **15 kliknięć** w krótkim czasie – przywraca ustawienia fabryczne (Matter decommission).
+## Matter Ecosystem
 
-## Jasność LED
-PWM:
-- częstotliwość `10 kHz`,
-- rozdzielczość `12 bit`,
-- kanał PWM: `PWM_CHANNEL_LEDS_ON = 1`.
+The device exposes two independent endpoints in the Matter network:
+1. **Dimmable Light** - Global brightness control for the LED matrix.
+2. **Temperature Sensor** - Reporting current ambient temperature with 0.1°C precision. Reports are throttled to prevent network flooding (minimum interval of 5 seconds, maximum of 60 seconds).
 
-## Termometr (DS18B20)
-- GPIO: `GPIO32`,
-- odczyt nieblokujący (`setWaitForConversion(false)`),
-- cykl odczytu co `5000 ms`,
-- czas konwersji `800 ms`.
+**Pairing Code:** `34970112332`
 
-## Wi-Fi i sekretne dane
-Dane Wi-Fi są w pliku lokalnym:
+---
 
-- `src/config/wifi_secrets_local.h`
+## Hardware Control (GPIO35)
 
-Plik jest ignorowany przez Git i nie trafia do repozytorium.
+The device features a single monostable button with built-in software debouncing:
 
-## Pinout LED (`GPIO_DIGITS[col][row]`)
-Kolumny: `H10 H1 M10 M1 S10 S1`
-Wiersze: bity BCD `1 2 4 8`
+* **Single click:** Toggle display mode (`M_CLOCK` ↔ `M_THERMOMETER`).
+* **Long press (> 800 ms):** Cycle hardware display brightness (`2 → 8 → 128 → 4095`).
+* **Fast 15 clicks (within 3s):** Hard Reset - removes Matter credentials (Decommission), restores factory settings, and restarts the device.
 
-| Kolumna (cyfra) | row0 (bit1) | row1 (bit2) | row2 (bit4) | row3 (bit8) |
+---
+
+## Diagnostic System and Error Codes
+
+The clock is designed with a strict failure notification system. If a critical error occurs, normal operation is interrupted, and the BCD screen enters Diagnostic Mode (utilizing the first two columns, H10 and H1).
+
+| Matrix Signal (Columns 0 & 1) | Failure Type | Description |
+| :--- | :--- | :--- |
+| **Blinking 1 bottom-left LED** | `Boot Wait / Heartbeat` | Clock is booting. Searching for the temperature sensor before starting the Matter protocol. If blinking persists, check the power/data line of the DS18B20. |
+| **Two bottom LEDs (Weight 1)** | `DIAG_CODE_WIFI` | No Wi-Fi connection. The device is attempting to reconnect in the background. |
+| **Two LEDs (Weight 2)** | `DIAG_CODE_NTP` | No time synchronization. The `pool.ntp.org` server is unreachable or time has desynchronized (> 12 hours). |
+| **Two LEDs (Weight 4)** | `DIAG_CODE_TEMP` | Thermometer sensor failure during normal operation. No valid readings for over 15 seconds. |
+| **Value "77" in temp mode** | `TEMPORARY_TEMP_ERR` | Temporary reading error from DS18B20 (e.g., voltage drop). Lasts until a successful measurement or entry into the hard `DIAG_CODE_TEMP` state. |
+
+*Note: In the event of multiple simultaneous errors, the clock will rotate through the active diagnostic messages every 1 second.*
+
+---
+
+## Hardware Architecture
+
+### LED Matrix Management (Single-Channel PWM Hack)
+To conserve limited ESP32 hardware timer resources, the device uses only one PWM channel (10 kHz, 12-bit). The application logic dynamically attaches (`ledcAttachChannel`) and detaches (`ledcDetach`) physical pins to the same timer depending on the required BCD states.
+
+### LED Matrix Pinout (`GPIO_DIGITS`)
+Columns: `H10 H1 M10 M1 S10 S1` (Left to Right)
+Rows: BCD bits `1 2 4 8` (Bottom to Top)
+
+| Column (Digit) | Weight 1 (row0) | Weight 2 (row1) | Weight 4 (row2) | Weight 8 (row3) |
 |---|---:|---:|---:|---:|
-| col0 (H10) | GPIO21 | GPIO17 | NO | NO |
-| col1 (H1)  | GPIO4  | GPIO14 | GPIO16 | GPIO27 |
-| col2 (M10) | GPIO19 | GPIO2  | GPIO13 | NO |
-| col3 (M1)  | GPIO18 | GPIO22 | GPIO26 | GPIO15 |
-| col4 (S10) | GPIO23 | GPIO12 | GPIO3  | NO |
-| col5 (S1)  | GPIO5  | GPIO1  | GPIO25 | GPIO33 |
+| **H10 (Hours)** | GPIO21 | GPIO17 | NO | NO |
+| **H1 (Hours)** | GPIO4 | GPIO14 | GPIO16 | GPIO27 |
+| **M10 (Minutes)** | GPIO19 | GPIO2 | GPIO13 | NO |
+| **M1 (Minutes)** | GPIO18 | GPIO22 | GPIO26 | GPIO15 |
+| **S10 (Seconds)** | GPIO23 | GPIO12 | GPIO3 | NO |
+| **S1 (Seconds)** | GPIO5 | GPIO1 | GPIO25 | GPIO33 |
 
-**Ważne:** Z powodu użycia sprzętowych pinów UART (GPIO1, GPIO3) do sterowania matrycą, logowanie Serial w kodzie jest celowo całkowicie wyłączone (z poziomu skryptu sh oraz poprzez `Serial.end()`), aby zapobiec niekontrolowanemu migotaniu diod wynikającemu z dużej ilości logów generowanych przez rdzeń Matter.
+**CRITICAL NOTE (NO SERIAL MONITOR):** Pins `GPIO1` (TX) and `GPIO3` (RX) are hardware-mapped to drive the LED matrix. To prevent random LED flickering caused by the massive log traffic generated by the Matter core, the Serial interface is completely disabled in the code (`Serial.end()`). Use the matrix diagnostic system described above for debugging.
 
-`NO` oznacza brak diody na danej pozycji siatki.
+---
 
-## Biblioteki
-- `ezButton`
-- `OneWire`
-- `DallasTemperature`
-- `WiFi.h`
-- `Matter`
-- `time.h`
-- `esp_sntp.h`
+## Development Environment (Nix)
+
+The project uses an isolated environment based on Nix packages, ensuring deterministic builds.
+
+### Secrets Preparation
+Before compiling, create a local configuration file (ignored by git):
+`src/config/wifi_secrets_local.h`
+```cpp
+#pragma once
+inline constexpr const char WIFI_SSID[] = "YourNetworkSSID";
+inline constexpr const char WIFI_PASSWORD[] = "YourNetworkPassword";
+
+```
+
+### Utility Scripts
+
+* `./flash_bcd.sh` - Automatically detects the tty port (e.g., `ttyACM0`), compiles, and flashes the code to the microcontroller using `arduino-cli`. Uses the `rainmaker` partition scheme with the debug core disabled.
+* `./erase_esp.sh` - Erases the ESP32 flash memory (useful for Matter provisioning issues).
+* `./dump_code.sh` / `./load_code.sh` - Bash/Python scripts for dumping repository contents into a single markdown file for code review purposes.
+
+## External Libraries
+
+* `Matter` (Core built-in library)
+* `WiFi.h`, `time.h`, `esp_sntp.h`
+* `ezButton` (Physical button handling)
+* `OneWire` & `DallasTemperature` (Thermometer bus and sensor handling)
