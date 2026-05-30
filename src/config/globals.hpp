@@ -19,7 +19,6 @@ inline const int LONG_PRESS_INITIAL_MS = 800;
 inline const int LONG_PRESS_REPEAT_MS = 400;
 inline const uint32_t RESET_CLICK_TIMEOUT_MS = 3000;
 inline const int RESET_CLICK_TARGET = 15;
-inline const uint32_t WIFI_RETRY_INTERVAL_MS = 10000;
 inline const uint32_t NTP_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 inline const uint32_t MATTER_BRIGHTNESS_REPORT_MIN_MS = 300;
 inline const uint32_t MATTER_TEMP_REPORT_MIN_MS = 5000;
@@ -84,7 +83,6 @@ struct AppState {
   uint32_t button_last_click_ts = 0;
 
   bool wifi_connected = false;
-  uint32_t wifi_last_attempt_ts = 0;
   
   volatile uint32_t ntp_last_sync_ts = 0;
   volatile uint8_t matter_last_brightness_reported = 0;

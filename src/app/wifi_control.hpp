@@ -18,10 +18,9 @@ inline void setup_wifi_initial() {
   }
   
   app.wifi_connected = (WiFi.status() == WL_CONNECTED);
-  app.wifi_last_attempt_ts = millis();
 }
 
-inline void ensure_wifi_connected(uint32_t now_ms) {
+inline void ensure_wifi_connected() {
   if (WiFi.status() == WL_CONNECTED) {
     app.wifi_connected = true;
     return;

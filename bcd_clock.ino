@@ -33,8 +33,8 @@ void setup() {
   set_all(LOW);
   apply_leds();
   setup_button();
-  setup_temperature_sensor();
-  matterTemperatureSensor.begin(-25.0);
+  float initial_temperature = setup_temperature_sensor();
+  matterTemperatureSensor.begin(initial_temperature);
   setup_wifi_initial();
   configure_time_sync();
   
@@ -56,8 +56,7 @@ void setup() {
   Matter.begin();
 
   uint32_t now_ms = millis();
-  app.temperature_last_cycle_ts = 0;
-  app.temperature_last_read_ts = now_ms;
+  app.matter_last_temperature_reported = initial_temperature;
   app.matter_last_temperature_report_ts = now_ms;
   app.matter_last_brightness_report_ts = now_ms;
 }
@@ -66,7 +65,7 @@ void loop() {
   handle_button();
   uint32_t now_ms = millis();
 
-  ensure_wifi_connected(now_ms);
+  ensure_wifi_connected();
 
   start_temperature_conversion(now_ms);
   finish_temperature_conversion(now_ms);

@@ -9,7 +9,7 @@
 inline constexpr const char NTP_SERVER[] = "pool.ntp.org";
 inline constexpr const char TZ_ENV[] = "CET-1CEST,M3.5.0,M10.5.0/3";
 
-inline void time_sync_notification_cb(struct timeval *tv) {
+inline void time_sync_notification_cb(struct timeval *) {
   app.ntp_last_sync_ts = millis();
 }
 
