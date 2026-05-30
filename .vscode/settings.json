@@ -3,6 +3,7 @@
         "/^bash flash_bcd\\.sh$/": {
             "approve": true,
             "matchCommandLine": true
-        }
+        },
+        "./flash_bcd.sh": true
     }
 }
